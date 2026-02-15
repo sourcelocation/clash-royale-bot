@@ -64,6 +64,26 @@ def _sim_speed_label(mode: str, tick_hz: int) -> str:
     return mode
 
 
+def _format_compact_number(value: int | float, *, decimals: int = 2) -> str:
+    n = float(value)
+    sign = "-" if n < 0 else ""
+    x = abs(n)
+    if x >= 1_000_000_000:
+        unit = "b"
+        scaled = x / 1_000_000_000.0
+    elif x >= 1_000_000:
+        unit = "m"
+        scaled = x / 1_000_000.0
+    elif x >= 1_000:
+        unit = "k"
+        scaled = x / 1_000.0
+    else:
+        if float(n).is_integer():
+            return str(int(n))
+        return f"{n:.{decimals}f}"
+    return f"{sign}{scaled:.{decimals}f}{unit}"
+
+
 class _TrainingVisualizer:
     def __init__(self, fps: int):
         from training.tools.cpp_view_renderer import ArenaRenderer, kv
@@ -110,21 +130,32 @@ class _TrainingVisualizer:
         benchmark_games = int(metrics.get("benchmark_games", 0))
         benchmark_win_rate = float(metrics.get("benchmark_win_rate", 0.0))
         sim_speed_label = str(metrics.get("sim_speed_label", "max"))
+        global_step_label = _format_compact_number(int(metrics.get("global_step", 0)), decimals=2)
+        iteration_label = _format_compact_number(int(metrics.get("iteration", 0)), decimals=2)
+        samples_per_second_label = _format_compact_number(samples_per_second, decimals=2)
+        rollout_step_label = _format_compact_number(rollout_step, decimals=2)
+        total_rollout_steps_label = _format_compact_number(total_rollout_steps, decimals=2)
+        steps_to_update_label = _format_compact_number(steps_to_update, decimals=2)
+        benchmark_games_label = _format_compact_number(benchmark_games, decimals=2)
+        recent_steps = [int(x) for x in metrics.get("active_recent_steps", [])]
+        anchor_steps = [int(x) for x in metrics.get("active_anchor_steps", [])]
+        recent_label = self._match_label("Latest vs Recent", recent_steps)
+        anchor_label = self._match_label("Latest vs Anchor", anchor_steps)
         if self.collapsed:
             lines = [
                 "[MINIMAL TRAINING VIEW]",
                 "Collapsed mode: training running in background",
-                self._kv("Global step", str(int(metrics.get("global_step", 0)))),
-                self._kv("Iteration", str(int(metrics.get("iteration", 0)))),
-                self._kv("Samples/s", str(samples_per_second)),
+                self._kv("Global step", global_step_label),
+                self._kv("Iteration", iteration_label),
+                self._kv("Samples/s", samples_per_second_label),
                 self._kv("Env steps/s", f"{env_steps_per_second:.2f}"),
-                self._kv("Rollout step", f"{rollout_step}/{total_rollout_steps}"),
-                self._kv("Steps to update", str(steps_to_update)),
+                self._kv("Rollout step", f"{rollout_step_label}/{total_rollout_steps_label}"),
+                self._kv("Steps to update", steps_to_update_label),
                 self._kv("Progress", f"{progress_pct:.1f}%"),
                 self._kv("Refresh", refresh_status),
                 self._kv("Sim speed", sim_speed_label),
                 self._kv("Benchmark", f"{benchmark_current:.1f}"),
-                self._kv("Benchmark games", str(benchmark_games)),
+                self._kv("Benchmark games", benchmark_games_label),
                 self._kv("Benchmark WR", f"{100.0 * benchmark_win_rate:.1f}%"),
                 self._kv("Env", str(self.env_index)),
                 "",
@@ -150,8 +181,8 @@ class _TrainingVisualizer:
                     },
                     "legend": [
                         {"label": "Latest vs Latest", "color": (70, 140, 230)},
-                        {"label": "Latest vs Recent", "color": (230, 145, 60)},
-                        {"label": "Latest vs Anchor", "color": (80, 180, 110)},
+                        {"label": recent_label, "color": (230, 145, 60)},
+                        {"label": anchor_label, "color": (80, 180, 110)},
                     ],
                 },
             )
@@ -160,17 +191,17 @@ class _TrainingVisualizer:
         lines = [
             "[MINIMAL TRAINING]",
             self._kv("Env index", str(self.env_index)),
-            self._kv("Global step", str(int(metrics.get("global_step", 0)))),
-            self._kv("Iteration", str(int(metrics.get("iteration", 0)))),
-            self._kv("Samples/s", str(samples_per_second)),
+            self._kv("Global step", global_step_label),
+            self._kv("Iteration", iteration_label),
+            self._kv("Samples/s", samples_per_second_label),
             self._kv("Env steps/s", f"{env_steps_per_second:.2f}"),
-            self._kv("Rollout step", f"{rollout_step}/{total_rollout_steps}"),
-            self._kv("Steps to update", str(steps_to_update)),
+            self._kv("Rollout step", f"{rollout_step_label}/{total_rollout_steps_label}"),
+            self._kv("Steps to update", steps_to_update_label),
             self._kv("Progress", f"{progress_pct:.1f}%"),
             self._kv("Refresh", refresh_status),
             self._kv("Sim speed", sim_speed_label),
             self._kv("Benchmark", f"{benchmark_current:.1f}"),
-            self._kv("Benchmark games", str(benchmark_games)),
+            self._kv("Benchmark games", benchmark_games_label),
             self._kv("Benchmark WR", f"{100.0 * benchmark_win_rate:.1f}%"),
             "",
             "[ENV]",
@@ -204,12 +235,23 @@ class _TrainingVisualizer:
                 },
                 "legend": [
                     {"label": "Latest vs Latest", "color": (70, 140, 230)},
-                    {"label": "Latest vs Recent", "color": (230, 145, 60)},
-                    {"label": "Latest vs Anchor", "color": (80, 180, 110)},
+                    {"label": recent_label, "color": (230, 145, 60)},
+                    {"label": anchor_label, "color": (80, 180, 110)},
                 ],
             },
         )
         return True
+
+    def _match_label(self, prefix: str, steps: list[int]) -> str:
+        if not steps:
+            return f"{prefix} (step: -)"
+        joined = ", ".join(self._format_step_compact(int(s)) for s in steps[:3])
+        if len(steps) > 3:
+            joined = f"{joined}, +{len(steps) - 3}"
+        return f"{prefix} (step: {joined})"
+
+    def _format_step_compact(self, value: int) -> str:
+        return _format_compact_number(int(value), decimals=2)
 
     def close(self) -> None:
         self.renderer.close()
@@ -458,7 +500,7 @@ def run_training(args: Args) -> None:
             raise ValueError(f"Minimal pool trainer currently supports exactly 2 agents, got {agent_count}")
 
         sim_speed_mode = _normalize_sim_speed_mode(args.sim_speed_mode)
-        fixed_ticks_per_step = 1
+        decision_interval_ticks = max(1, int(args.cpp_tick_hz))
         tick_delay_s = _tick_delay_seconds_for_mode(sim_speed_mode, int(args.cpp_tick_hz))
 
         def build_reset_options(count: int) -> list[dict]:
@@ -466,7 +508,7 @@ def run_training(args: Args) -> None:
                 {
                     "team_controllers": ["external" for _ in range(agent_count)],
                     "training_mode": True,
-                    "ticks_per_step": int(fixed_ticks_per_step),
+                    "ticks_per_step": 1,
                 }
                 for _ in range(count)
             ]
@@ -538,9 +580,6 @@ def run_training(args: Args) -> None:
         wait_action = np.zeros((num_branches,), dtype=np.int32)
         if wait_idx is not None:
             wait_action[wait_idx] = 1
-        barrier_wait_actions = np.empty((args.num_envs, agent_count, num_branches), dtype=np.int32)
-        barrier_wait_actions[:] = wait_action
-
         stream_policy_id = np.zeros((stream_count,), dtype=np.int64)
         stream_trainable = np.ones((stream_count,), dtype=np.float32)
         env_match_tag: list[str] = ["latest_latest" for _ in range(args.num_envs)]
@@ -620,7 +659,9 @@ def run_training(args: Args) -> None:
 
         global_step = 0
         env_batch_steps = 0
+        sim_tick_count = 0
         train_start = time.perf_counter()
+        last_done_env = np.zeros((args.num_envs,), dtype=bool)
 
         def cycle_sim_speed_mode() -> None:
             nonlocal sim_speed_mode, tick_delay_s
@@ -629,6 +670,103 @@ def run_training(args: Args) -> None:
             sim_speed_mode = modes[(idx + 1) % len(modes)]
             tick_delay_s = _tick_delay_seconds_for_mode(sim_speed_mode, int(args.cpp_tick_hz))
             print(f"[MIN] sim speed mode -> {_sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz))}")
+
+        def maybe_update_live_view(
+            *,
+            iteration: int,
+            rollout_step: int,
+            steps_to_update: int,
+            env_finished_flags: np.ndarray,
+            refresh_status_text: str,
+        ) -> None:
+            nonlocal live_view, live_view_failed, next_view_update_at
+            if live_view is None or live_view_failed:
+                return
+            now = time.perf_counter()
+            if now < next_view_update_at:
+                return
+            try:
+                refresh_label = refresh_status_text
+                if refresh_label.startswith("Last Refresh:"):
+                    refresh_label = f"Last Refresh: {max(0.0, now - last_refresh_wall):.1f}s"
+                env_codes = [0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2 for tag in env_match_tag]
+                elapsed = max(1e-9, now - train_start)
+                keep_open = live_view.update(
+                    env.debug_state_many(),
+                    {
+                        "global_step": global_step,
+                        "iteration": iteration,
+                        "samples_per_second": int(global_step / elapsed),
+                        "env_steps_per_second": float(env_batch_steps) / elapsed,
+                        "rollout_step": int(rollout_step),
+                        "rollout_total_steps": int(args.num_steps),
+                        "steps_to_update": max(0, int(steps_to_update)),
+                        "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
+                        "env_opponent_codes": env_codes,
+                        "env_finished_flags": [bool(x) for x in env_finished_flags.tolist()],
+                        "refresh_status": refresh_label,
+                        "sim_speed_label": _sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz)),
+                        "benchmark_current": float(benchmark_tracker.current_rating),
+                        "benchmark_games": int(benchmark_tracker.total_games),
+                        "benchmark_win_rate": float(benchmark_tracker.win_rate),
+                        "active_recent_steps": [
+                            int(pool.active_policy_step.get(int(pid), -1)) for pid in pool.active_recent_ids
+                        ],
+                        "active_anchor_steps": [
+                            int(pool.active_policy_step.get(int(pid), -1)) for pid in pool.active_anchor_ids
+                        ],
+                        "num_envs": int(args.num_envs),
+                    },
+                )
+                if live_view is not None and live_view.pop_speed_cycle_requested():
+                    cycle_sim_speed_mode()
+                next_view_update_at = now + (1.0 / max(1, int(args.visualize_fps)))
+                if not keep_open:
+                    live_view.close()
+                    live_view = None
+            except Exception as exc:
+                live_view_failed = True
+                if live_view is not None:
+                    live_view.close()
+                    live_view = None
+                print(f"[MIN] live viewer disabled after runtime error: {exc}")
+
+        def pace_before_env_step(
+            *,
+            sleep_s: float,
+            iteration: int,
+            rollout_step: int,
+            steps_to_update: int,
+            env_finished_flags: np.ndarray,
+            refresh_status_text: str,
+        ) -> None:
+            if sleep_s <= 0.0:
+                return
+            if live_view is None or live_view_failed:
+                time.sleep(sleep_s)
+                return
+            deadline = time.perf_counter() + float(sleep_s)
+            frame_dt = 1.0 / max(1, int(args.visualize_fps))
+            while True:
+                now = time.perf_counter()
+                if now >= deadline:
+                    break
+                maybe_update_live_view(
+                    iteration=iteration,
+                    rollout_step=rollout_step,
+                    steps_to_update=steps_to_update,
+                    env_finished_flags=env_finished_flags,
+                    refresh_status_text=refresh_status_text,
+                )
+                remaining = deadline - now
+                time.sleep(min(remaining, max(0.001, frame_dt * 0.5)))
+            maybe_update_live_view(
+                iteration=iteration,
+                rollout_step=rollout_step,
+                steps_to_update=steps_to_update,
+                env_finished_flags=env_finished_flags,
+                refresh_status_text=refresh_status_text,
+            )
 
         print(f"[MIN] sim speed mode={_sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz))}")
 
@@ -639,12 +777,14 @@ def run_training(args: Args) -> None:
 
             rollout_start = time.perf_counter()
             for step in range(args.num_steps):
+                should_decide = (sim_tick_count % decision_interval_ticks) == 0
                 global_step += stream_count
                 obs[step] = next_obs
                 masks[step] = next_mask
                 card_masks[step] = next_card
                 dones[step] = next_done
-                train_mask[step] = torch.as_tensor(stream_trainable, dtype=torch.float32, device=device)
+                step_trainable = stream_trainable if should_decide else np.zeros_like(stream_trainable)
+                train_mask[step] = torch.as_tensor(step_trainable, dtype=torch.float32, device=device)
 
                 actions_stream = torch.zeros((stream_count, num_branches), dtype=torch.long, device=device)
                 logprobs_stream = torch.zeros((stream_count,), dtype=torch.float32, device=device)
@@ -682,10 +822,17 @@ def run_training(args: Args) -> None:
                 action_np = actions_stream.detach().cpu().numpy().astype(np.int32, copy=False)
                 actions_per_env = np.empty((args.num_envs, agent_count, num_branches), dtype=np.int32)
                 actions_per_env[:] = wait_action
-                actions_per_env[stream_env, stream_team] = action_np
+                if should_decide:
+                    actions_per_env[stream_env, stream_team] = action_np
 
-                if tick_delay_s > 0.0:
-                    time.sleep(tick_delay_s)
+                pace_before_env_step(
+                    sleep_s=tick_delay_s,
+                    iteration=iteration,
+                    rollout_step=int(step),
+                    steps_to_update=max(0, int(args.num_steps) - int(step)),
+                    env_finished_flags=last_done_env,
+                    refresh_status_text=refresh_status,
+                )
 
                 packed_obs, packed_mask, packed_card, packed_reward, packed_done, packed_trunc, packed_winner, _rt = (
                     env.step_many_packed(actions_per_env)
@@ -696,6 +843,8 @@ def run_training(args: Args) -> None:
                 current_card = packed_card
 
                 done_env = np.logical_or(packed_done, packed_trunc)
+                last_done_env = done_env
+                sim_tick_count += 1
                 rewards[step] = torch.as_tensor(
                     packed_reward[stream_env, stream_team], dtype=torch.float32, device=device
                 )
@@ -727,7 +876,7 @@ def run_training(args: Args) -> None:
                         options[int(env_idx)] = {
                             "team_controllers": ["external" for _ in range(agent_count)],
                             "training_mode": True,
-                            "ticks_per_step": int(fixed_ticks_per_step),
+                            "ticks_per_step": 1,
                         }
                     reset_many_obs, _ = env.reset_many(
                         seeds=[None for _ in range(args.num_envs)],
@@ -740,51 +889,13 @@ def run_training(args: Args) -> None:
                             raise RuntimeError(f"reset did not return observation for env {env_i}")
                         write_reset(env_i, obs_entry)
 
-                if live_view is not None and not live_view_failed:
-                    try:
-                        now = time.perf_counter()
-                        if now >= next_view_update_at:
-                            refresh_label = refresh_status
-                            if refresh_label.startswith("Last Refresh:"):
-                                refresh_label = f"Last Refresh: {max(0.0, now - last_refresh_wall):.1f}s"
-                                env_codes = [
-                                    0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
-                                    for tag in env_match_tag
-                                ]
-                                elapsed = max(1e-9, now - train_start)
-                                rollout_step = int(step + 1)
-                                keep_open = live_view.update(
-                                    env.debug_state_many(),
-                                    {
-                                        "global_step": global_step,
-                                        "iteration": iteration,
-                                        "samples_per_second": int(global_step / elapsed),
-                                        "env_steps_per_second": float(env_batch_steps) / elapsed,
-                                        "rollout_step": rollout_step,
-                                        "rollout_total_steps": int(args.num_steps),
-                                        "steps_to_update": max(0, int(args.num_steps) - rollout_step),
-                                    "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
-                                    "env_opponent_codes": env_codes,
-                                    "env_finished_flags": [bool(x) for x in done_env.tolist()],
-                                    "refresh_status": refresh_label,
-                                    "sim_speed_label": _sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz)),
-                                    "benchmark_current": float(benchmark_tracker.current_rating),
-                                    "benchmark_games": int(benchmark_tracker.total_games),
-                                    "benchmark_win_rate": float(benchmark_tracker.win_rate),
-                                    "num_envs": int(args.num_envs),
-                                },
-                            )
-                            if live_view is not None and live_view.pop_speed_cycle_requested():
-                                cycle_sim_speed_mode()
-                            next_view_update_at = now + (1.0 / max(1, int(args.visualize_fps)))
-                            if not keep_open:
-                                live_view.close()
-                                live_view = None
-                    except Exception as exc:
-                        live_view_failed = True
-                        live_view.close()
-                        live_view = None
-                        print(f"[MIN] live viewer disabled after runtime error: {exc}")
+                maybe_update_live_view(
+                    iteration=iteration,
+                    rollout_step=int(step + 1),
+                    steps_to_update=max(0, int(args.num_steps) - int(step + 1)),
+                    env_finished_flags=done_env,
+                    refresh_status_text=refresh_status,
+                )
 
                 next_obs, next_mask, next_card = stream_tensors()
             rollout_s = time.perf_counter() - rollout_start
@@ -885,67 +996,7 @@ def run_training(args: Args) -> None:
 
             if pool.should_refresh(iteration):
                 refresh_status = "Queued"
-                barrier_start = time.perf_counter()
-                barrier_done = np.zeros((args.num_envs,), dtype=bool)
-                while True:
-                    if tick_delay_s > 0.0:
-                        time.sleep(tick_delay_s)
-                    packed_obs, packed_mask, packed_card, _reward, packed_done, packed_trunc, _winner, _rt = (
-                        env.step_many_packed(barrier_wait_actions)
-                    )
-                    env_batch_steps += 1
-                    current_obs = packed_obs
-                    current_mask = packed_mask
-                    current_card = packed_card
-                    done_env = np.logical_or(packed_done, packed_trunc)
-                    barrier_done = np.logical_or(barrier_done, done_env)
-                    if live_view is not None and not live_view_failed:
-                        try:
-                            now = time.perf_counter()
-                            if now >= next_view_update_at:
-                                env_codes = [
-                                    0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
-                                    for tag in env_match_tag
-                                ]
-                                elapsed = max(1e-9, now - train_start)
-                                keep_open = live_view.update(
-                                    env.debug_state_many(),
-                                    {
-                                        "global_step": global_step,
-                                        "iteration": iteration,
-                                        "samples_per_second": int(global_step / elapsed),
-                                        "env_steps_per_second": float(env_batch_steps) / elapsed,
-                                        "rollout_step": int(args.num_steps),
-                                        "rollout_total_steps": int(args.num_steps),
-                                        "steps_to_update": 0,
-                                        "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
-                                        "env_opponent_codes": env_codes,
-                                        "env_finished_flags": [bool(x) for x in barrier_done.tolist()],
-                                        "refresh_status": (
-                                            f"Barrier: {int(np.count_nonzero(barrier_done))}/{int(args.num_envs)}"
-                                        ),
-                                        "sim_speed_label": _sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz)),
-                                        "benchmark_current": float(benchmark_tracker.current_rating),
-                                        "benchmark_games": int(benchmark_tracker.total_games),
-                                        "benchmark_win_rate": float(benchmark_tracker.win_rate),
-                                        "num_envs": int(args.num_envs),
-                                    },
-                                )
-                                if live_view is not None and live_view.pop_speed_cycle_requested():
-                                    cycle_sim_speed_mode()
-                                next_view_update_at = now + (1.0 / max(1, int(args.visualize_fps)))
-                                if not keep_open:
-                                    live_view.close()
-                                    live_view = None
-                        except Exception as exc:
-                            live_view_failed = True
-                            if live_view is not None:
-                                live_view.close()
-                                live_view = None
-                            print(f"[MIN] live viewer disabled after runtime error: {exc}")
-                    if bool(done_env.all()):
-                        break
-
+                refresh_start = time.perf_counter()
                 pool.refresh_active()
                 last_refresh_wall = time.perf_counter()
                 refresh_status = f"Last Refresh: {0.0:.1f}s"
@@ -964,7 +1015,8 @@ def run_training(args: Args) -> None:
                     assign_env(env_idx)
                 next_obs, next_mask, next_card = stream_tensors()
                 next_done = torch.zeros((stream_count,), dtype=torch.float32, device=device)
-                print(f"[MIN] pool refresh barrier_s={time.perf_counter() - barrier_start:.3f}")
+                last_done_env = np.zeros((args.num_envs,), dtype=bool)
+                print(f"[MIN] pool refresh reset_s={time.perf_counter() - refresh_start:.3f}")
             else:
                 refresh_status = f"Last Refresh: {max(0.0, time.perf_counter() - last_refresh_wall):.1f}s"
 
@@ -983,13 +1035,16 @@ def run_training(args: Args) -> None:
                 trainable_ratio = float(active_size) / float(max(1, int(b_train.numel())))
                 pool_active_total = int(len(pool.active_recent_ids) + len(pool.active_anchor_ids))
                 print(
-                    f"[MIN] iter={iteration}/{num_iterations} step={global_step} sample_sps={sample_sps} "
+                    f"[MIN] iter={_format_compact_number(iteration, decimals=2)}/{_format_compact_number(num_iterations, decimals=2)} "
+                    f"step={_format_compact_number(global_step, decimals=2)} "
+                    f"sample_sps={_format_compact_number(sample_sps, decimals=2)} "
                     f"env_step_sps={env_step_sps:.2f} "
                     f"rollout_s={rollout_s:.3f} update_s={update_s:.3f} "
                     f"pg={float(pg_loss.item()):.4f} v={float(v_loss.item()):.4f} kl={float(approx_kl.item()):.5f} "
                     f"cf={clipfrac:.4f} mix(ll/lr/la)={ll}/{lr}/{la} "
                     f"speed={_sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz))} "
-                    f"bench={float(benchmark_tracker.current_rating):.1f} games={int(benchmark_tracker.total_games)} "
+                    f"bench={float(benchmark_tracker.current_rating):.1f} "
+                    f"games={_format_compact_number(int(benchmark_tracker.total_games), decimals=2)} "
                     f"batch_score={float(benchmark_tracker.last_batch_score):.3f} "
                     f"active_pool(r/a)={len(pool.active_recent_ids)}/{len(pool.active_anchor_ids)}"
                 )
@@ -1051,7 +1106,7 @@ def run_training(args: Args) -> None:
             "batch_size": int(batch_size),
             "pool_enabled": bool(args.pool_enabled),
             "sim_speed_mode": str(sim_speed_mode),
-            "ticks_per_step": int(fixed_ticks_per_step),
+            "decision_interval_ticks": int(decision_interval_ticks),
             "tick_delay_seconds": float(tick_delay_s),
             "active_recent": int(len(pool.active_recent_ids)),
             "active_anchor": int(len(pool.active_anchor_ids)),
@@ -1069,8 +1124,9 @@ def run_training(args: Args) -> None:
         writer.add_scalar("timing/overall_env_step_sps", overall_env_step_sps, int(global_step))
         writer.flush()
         print(
-            f"[MIN] done exp={experiment_dir.name} step={global_step} "
-            f"sample_sps={summary['overall_sample_sps']:.2f} env_step_sps={summary['overall_env_step_sps']:.2f} "
+            f"[MIN] done exp={experiment_dir.name} step={_format_compact_number(global_step, decimals=2)} "
+            f"sample_sps={_format_compact_number(summary['overall_sample_sps'], decimals=2)} "
+            f"env_step_sps={summary['overall_env_step_sps']:.2f} "
             f"device={device}"
         )
     finally:

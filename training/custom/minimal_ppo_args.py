@@ -51,3 +51,7 @@ class Args:
     pool_latest_recent_prob: float = 0.5
     pool_latest_anchor_prob: float = 0.1
     pool_deterministic: bool = True
+
+    elo_enabled: bool = True
+    elo_initial: float = 1000.0
+    elo_k: float = 16.0

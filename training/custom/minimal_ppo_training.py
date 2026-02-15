@@ -76,6 +76,9 @@ class _TrainingVisualizer:
         progress_pct = 100.0 * float(metrics.get("progress_frac", 0.0))
         refresh_status = str(metrics.get("refresh_status", "Last Refresh: -"))
         env_finished_flags = [bool(x) for x in metrics.get("env_finished_flags", [])]
+        elo_current = float(metrics.get("elo_current", 0.0))
+        elo_games = int(metrics.get("elo_games", 0))
+        elo_win_rate = float(metrics.get("elo_win_rate", 0.0))
         if self.collapsed:
             lines = [
                 "[MINIMAL TRAINING VIEW]",
@@ -87,6 +90,9 @@ class _TrainingVisualizer:
                 self._kv("Steps to update", str(steps_to_update)),
                 self._kv("Progress", f"{progress_pct:.1f}%"),
                 self._kv("Refresh", refresh_status),
+                self._kv("ELO", f"{elo_current:.1f}"),
+                self._kv("ELO games", str(elo_games)),
+                self._kv("ELO WR", f"{100.0 * elo_win_rate:.1f}%"),
                 self._kv("Env", str(self.env_index)),
                 "",
                 "Press Esc to restore full preview",
@@ -127,6 +133,9 @@ class _TrainingVisualizer:
             self._kv("Steps to update", str(steps_to_update)),
             self._kv("Progress", f"{progress_pct:.1f}%"),
             self._kv("Refresh", refresh_status),
+            self._kv("ELO", f"{elo_current:.1f}"),
+            self._kv("ELO games", str(elo_games)),
+            self._kv("ELO WR", f"{100.0 * elo_win_rate:.1f}%"),
             "",
             "[ENV]",
             self._kv("Sim time", f"{float(state.get('sim_time_s', 0.0)):.2f}s"),
@@ -196,6 +205,8 @@ class _GpuOpponentPool:
         self.recent: list[_PolicySnapshot] = []
         self.anchors: list[_PolicySnapshot] = []
         self.active_agents: dict[int, MaskedPPOAgent] = {}
+        self.active_policy_step: dict[int, int] = {}
+        self.active_policy_kind: dict[int, str] = {}
         self.active_recent_ids: list[int] = []
         self.active_anchor_ids: list[int] = []
         self._next_policy_id = 1
@@ -231,6 +242,8 @@ class _GpuOpponentPool:
         if not self.enabled:
             return
         self.active_agents = {}
+        self.active_policy_step = {}
+        self.active_policy_kind = {}
         self.active_recent_ids = []
         self.active_anchor_ids = []
         self._next_policy_id = 1
@@ -243,6 +256,8 @@ class _GpuOpponentPool:
                 pid = self._next_policy_id
                 self._next_policy_id += 1
                 self.active_agents[pid] = self._build_frozen_agent(self.recent[int(idx)])
+                self.active_policy_step[pid] = int(self.recent[int(idx)].step)
+                self.active_policy_kind[pid] = "recent"
                 self.active_recent_ids.append(pid)
         if anchor_count > 0:
             idxs = self.rng.choice(len(self.anchors), size=anchor_count, replace=False)
@@ -250,6 +265,8 @@ class _GpuOpponentPool:
                 pid = self._next_policy_id
                 self._next_policy_id += 1
                 self.active_agents[pid] = self._build_frozen_agent(self.anchors[int(idx)])
+                self.active_policy_step[pid] = int(self.anchors[int(idx)].step)
+                self.active_policy_kind[pid] = "anchor"
                 self.active_anchor_ids.append(pid)
 
     def should_refresh(self, iteration: int) -> bool:
@@ -281,6 +298,43 @@ class _GpuOpponentPool:
             pid = int(self.active_recent_ids[int(self.rng.integers(len(self.active_recent_ids)))])
             return "latest_recent", pid
         return "latest_latest", None
+
+
+class _EloTracker:
+    def __init__(self, *, initial: float, k_factor: float):
+        self.current_rating = float(initial)
+        self.initial = float(initial)
+        self.k_factor = float(k_factor)
+        self.opponent_ratings: dict[int, float] = {}
+        self.total_games = 0
+        self.total_wins = 0
+        self.total_draws = 0
+        self.total_losses = 0
+
+    def _expected(self, r_a: float, r_b: float) -> float:
+        return 1.0 / (1.0 + 10.0 ** ((r_b - r_a) / 400.0))
+
+    def record_vs_checkpoint(self, *, checkpoint_step: int, score_current: float) -> tuple[float, float]:
+        opp_rating = float(self.opponent_ratings.get(int(checkpoint_step), self.initial))
+        e_cur = self._expected(self.current_rating, opp_rating)
+        e_opp = self._expected(opp_rating, self.current_rating)
+        self.current_rating = float(self.current_rating + self.k_factor * (float(score_current) - e_cur))
+        opp_new = float(opp_rating + self.k_factor * ((1.0 - float(score_current)) - e_opp))
+        self.opponent_ratings[int(checkpoint_step)] = opp_new
+        self.total_games += 1
+        if score_current >= 0.999:
+            self.total_wins += 1
+        elif score_current <= 0.001:
+            self.total_losses += 1
+        else:
+            self.total_draws += 1
+        return self.current_rating, opp_new
+
+    @property
+    def win_rate(self) -> float:
+        if self.total_games <= 0:
+            return 0.0
+        return float(self.total_wins) / float(self.total_games)
 
 
 def run_training(args: Args) -> None:
@@ -408,6 +462,9 @@ def run_training(args: Args) -> None:
         stream_policy_id = np.zeros((stream_count,), dtype=np.int64)
         stream_trainable = np.ones((stream_count,), dtype=np.float32)
         env_match_tag: list[str] = ["latest_latest" for _ in range(args.num_envs)]
+        env_latest_team = np.full((args.num_envs,), -1, dtype=np.int32)
+        env_opp_checkpoint_step = np.full((args.num_envs,), -1, dtype=np.int64)
+        elo_tracker = _EloTracker(initial=float(args.elo_initial), k_factor=float(args.elo_k))
 
         assign_rng = np.random.default_rng(int(args.seed) + 17)
 
@@ -422,6 +479,8 @@ def run_training(args: Args) -> None:
                 stream_policy_id[idx1] = 0
                 stream_trainable[idx0] = 1.0
                 stream_trainable[idx1] = 1.0
+                env_latest_team[env_idx] = -1
+                env_opp_checkpoint_step[env_idx] = -1
                 return
 
             latest_team = int(assign_rng.integers(0, 2))
@@ -432,6 +491,8 @@ def run_training(args: Args) -> None:
             stream_policy_id[opp_idx] = int(opp_pid)
             stream_trainable[latest_idx] = 1.0
             stream_trainable[opp_idx] = 0.0
+            env_latest_team[env_idx] = latest_team
+            env_opp_checkpoint_step[env_idx] = int(pool.active_policy_step.get(int(opp_pid), -1))
 
         for env_idx in range(args.num_envs):
             assign_env(env_idx)
@@ -525,7 +586,7 @@ def run_training(args: Args) -> None:
                 actions_per_env[:] = wait_action
                 actions_per_env[stream_env, stream_team] = action_np
 
-                packed_obs, packed_mask, packed_card, packed_reward, packed_done, packed_trunc, _winner, _rt = (
+                packed_obs, packed_mask, packed_card, packed_reward, packed_done, packed_trunc, packed_winner, _rt = (
                     env.step_many_packed(actions_per_env)
                 )
                 current_obs = packed_obs
@@ -539,6 +600,27 @@ def run_training(args: Args) -> None:
                 next_done = torch.as_tensor(done_env[stream_env].astype(np.float32), dtype=torch.float32, device=device)
 
                 done_ids = np.flatnonzero(done_env)
+                if bool(args.elo_enabled) and done_ids.size > 0:
+                    for env_idx in done_ids:
+                        env_i = int(env_idx)
+                        tag = env_match_tag[env_i]
+                        if tag == "latest_latest":
+                            continue
+                        checkpoint_step = int(env_opp_checkpoint_step[env_i])
+                        latest_team = int(env_latest_team[env_i])
+                        if checkpoint_step < 0 or latest_team < 0:
+                            continue
+                        winner = int(packed_winner[env_i])
+                        if winner < 0:
+                            score_current = 0.5
+                        elif winner == latest_team:
+                            score_current = 1.0
+                        else:
+                            score_current = 0.0
+                        elo_tracker.record_vs_checkpoint(
+                            checkpoint_step=checkpoint_step,
+                            score_current=score_current,
+                        )
 
                 if done_ids.size > 0:
                     options: list[dict | None] = [None for _ in range(args.num_envs)]
@@ -582,6 +664,9 @@ def run_training(args: Args) -> None:
                                 "env_opponent_codes": env_codes,
                                 "env_finished_flags": [bool(x) for x in done_env.tolist()],
                                 "refresh_status": refresh_label,
+                                "elo_current": float(elo_tracker.current_rating),
+                                "elo_games": int(elo_tracker.total_games),
+                                "elo_win_rate": float(elo_tracker.win_rate),
                                 "num_envs": int(args.num_envs),
                             },
                         )
@@ -721,6 +806,9 @@ def run_training(args: Args) -> None:
                                     "refresh_status": (
                                         f"Barrier: {int(np.count_nonzero(barrier_done))}/{int(args.num_envs)}"
                                     ),
+                                    "elo_current": float(elo_tracker.current_rating),
+                                    "elo_games": int(elo_tracker.total_games),
+                                    "elo_win_rate": float(elo_tracker.win_rate),
                                     "num_envs": int(args.num_envs),
                                 },
                             )
@@ -780,7 +868,9 @@ def run_training(args: Args) -> None:
                     f"[MIN] iter={iteration}/{num_iterations} step={global_step} sps={sps} "
                     f"rollout_s={rollout_s:.3f} update_s={update_s:.3f} "
                     f"pg={float(pg_loss.item()):.4f} v={float(v_loss.item()):.4f} kl={float(approx_kl.item()):.5f} "
-                    f"cf={clipfrac:.4f} mix(ll/lr/la)={ll}/{lr}/{la} active_pool(r/a)={len(pool.active_recent_ids)}/{len(pool.active_anchor_ids)}"
+                    f"cf={clipfrac:.4f} mix(ll/lr/la)={ll}/{lr}/{la} "
+                    f"elo={float(elo_tracker.current_rating):.1f} games={int(elo_tracker.total_games)} "
+                    f"active_pool(r/a)={len(pool.active_recent_ids)}/{len(pool.active_anchor_ids)}"
                 )
                 writer.add_scalar("charts/sps", sps, global_step)
                 writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
@@ -797,6 +887,10 @@ def run_training(args: Args) -> None:
                 writer.add_scalar("pool/latest_anchor_ratio", float(la) / float(env_count), global_step)
                 writer.add_scalar("pool/trainable_sample_ratio", trainable_ratio, global_step)
                 writer.add_scalar("pool/active_policy_count", pool_active_total, global_step)
+                if bool(args.elo_enabled):
+                    writer.add_scalar("selfplay/elo_current", float(elo_tracker.current_rating), global_step)
+                    writer.add_scalar("selfplay/elo_games", float(elo_tracker.total_games), global_step)
+                    writer.add_scalar("selfplay/elo_win_rate", float(elo_tracker.win_rate), global_step)
 
             if int(args.ckpt_every) > 0 and iteration % int(args.ckpt_every) == 0:
                 ckpt_path = experiment_dir / f"ckpt_iter_{iteration:06d}.pt"
@@ -825,6 +919,10 @@ def run_training(args: Args) -> None:
             "pool_enabled": bool(args.pool_enabled),
             "active_recent": int(len(pool.active_recent_ids)),
             "active_anchor": int(len(pool.active_anchor_ids)),
+            "elo_enabled": bool(args.elo_enabled),
+            "elo_current": float(elo_tracker.current_rating),
+            "elo_games": int(elo_tracker.total_games),
+            "elo_win_rate": float(elo_tracker.win_rate),
         }
         (experiment_dir / "timing_summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n",

@@ -74,6 +74,8 @@ class _TrainingVisualizer:
         rollout_step = int(metrics.get("rollout_step", 0))
         total_rollout_steps = max(1, int(metrics.get("rollout_total_steps", 1)))
         progress_pct = 100.0 * float(metrics.get("progress_frac", 0.0))
+        refresh_status = str(metrics.get("refresh_status", "Last Refresh: -"))
+        env_finished_flags = [bool(x) for x in metrics.get("env_finished_flags", [])]
         if self.collapsed:
             lines = [
                 "[MINIMAL TRAINING VIEW]",
@@ -84,6 +86,7 @@ class _TrainingVisualizer:
                 self._kv("Rollout step", f"{rollout_step}/{total_rollout_steps}"),
                 self._kv("Steps to update", str(steps_to_update)),
                 self._kv("Progress", f"{progress_pct:.1f}%"),
+                self._kv("Refresh", refresh_status),
                 self._kv("Env", str(self.env_index)),
                 "",
                 "Press Esc to restore full preview",
@@ -99,6 +102,7 @@ class _TrainingVisualizer:
                     "cells": env_codes,
                     "cols": grid_cols,
                     "cell_size": 14,
+                    "dim_mask": env_finished_flags,
                     "palette": {
                         0: (70, 140, 230),   # latest-latest
                         1: (230, 145, 60),   # latest-recent
@@ -122,6 +126,7 @@ class _TrainingVisualizer:
             self._kv("Rollout step", f"{rollout_step}/{total_rollout_steps}"),
             self._kv("Steps to update", str(steps_to_update)),
             self._kv("Progress", f"{progress_pct:.1f}%"),
+            self._kv("Refresh", refresh_status),
             "",
             "[ENV]",
             self._kv("Sim time", f"{float(state.get('sim_time_s', 0.0)):.2f}s"),
@@ -145,6 +150,7 @@ class _TrainingVisualizer:
                 "cells": env_codes,
                 "cols": grid_cols,
                 "cell_size": 14,
+                "dim_mask": env_finished_flags,
                 "palette": {
                     0: (70, 140, 230),   # latest-latest
                     1: (230, 145, 60),   # latest-recent
@@ -396,6 +402,8 @@ def run_training(args: Args) -> None:
         wait_action = np.zeros((num_branches,), dtype=np.int32)
         if wait_idx is not None:
             wait_action[wait_idx] = 1
+        barrier_wait_actions = np.empty((args.num_envs, agent_count, num_branches), dtype=np.int32)
+        barrier_wait_actions[:] = wait_action
 
         stream_policy_id = np.zeros((stream_count,), dtype=np.int64)
         stream_trainable = np.ones((stream_count,), dtype=np.float32)
@@ -459,20 +467,16 @@ def run_training(args: Args) -> None:
 
         next_obs, next_mask, next_card = stream_tensors()
         next_done = torch.zeros((stream_count,), dtype=torch.float32, device=device)
+        last_refresh_wall = time.perf_counter()
+        refresh_status = f"Last Refresh: {0.0:.1f}s"
 
         global_step = 0
         train_start = time.perf_counter()
-        pending_pool_refresh = False
-        done_since_refresh = np.zeros((args.num_envs,), dtype=bool)
 
         for iteration in range(1, num_iterations + 1):
             if args.anneal_lr:
                 frac = 1.0 - (iteration - 1.0) / max(1, num_iterations)
                 optimizer.param_groups[0]["lr"] = frac * float(args.learning_rate)
-
-            if pool.should_refresh(iteration):
-                pending_pool_refresh = True
-                done_since_refresh[:] = False
 
             rollout_start = time.perf_counter()
             for step in range(args.num_steps):
@@ -496,7 +500,7 @@ def run_training(args: Args) -> None:
                     idx_t = torch.as_tensor(idx_np, dtype=torch.long, device=device)
                     policy = agent if int(pid) == 0 else pool.active_agents.get(int(pid))
                     if policy is None:
-                        policy = agent
+                        raise RuntimeError(f"Missing active opponent policy id={int(pid)} for ongoing episode")
                     with torch.no_grad():
                         act, lp, _ent, val, rm, cm = policy.get_action_and_value(
                             next_obs[idx_t],
@@ -535,13 +539,6 @@ def run_training(args: Args) -> None:
                 next_done = torch.as_tensor(done_env[stream_env].astype(np.float32), dtype=torch.float32, device=device)
 
                 done_ids = np.flatnonzero(done_env)
-                if pending_pool_refresh and done_ids.size > 0:
-                    done_since_refresh[done_ids] = True
-
-                if pending_pool_refresh and bool(done_since_refresh.all()):
-                    pool.refresh_active()
-                    pending_pool_refresh = False
-                    done_since_refresh[:] = False
 
                 if done_ids.size > 0:
                     options: list[dict | None] = [None for _ in range(args.num_envs)]
@@ -561,10 +558,12 @@ def run_training(args: Args) -> None:
                         if obs_entry is None:
                             raise RuntimeError(f"reset did not return observation for env {env_i}")
                         write_reset(env_i, obs_entry)
-                        assign_env(env_i)
 
                 if live_view is not None and not live_view_failed:
                     try:
+                        refresh_label = refresh_status
+                        if refresh_label.startswith("Last Refresh:"):
+                            refresh_label = f"Last Refresh: {max(0.0, time.perf_counter() - last_refresh_wall):.1f}s"
                         env_codes = [
                             0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
                             for tag in env_match_tag
@@ -581,6 +580,8 @@ def run_training(args: Args) -> None:
                                 "steps_to_update": max(0, int(args.num_steps) - rollout_step),
                                 "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
                                 "env_opponent_codes": env_codes,
+                                "env_finished_flags": [bool(x) for x in done_env.tolist()],
+                                "refresh_status": refresh_label,
                                 "num_envs": int(args.num_envs),
                             },
                         )
@@ -685,6 +686,82 @@ def run_training(args: Args) -> None:
 
             if pool.should_promote(iteration):
                 pool.promote(agent, step=global_step)
+
+            if pool.should_refresh(iteration):
+                refresh_status = "Queued"
+                barrier_start = time.perf_counter()
+                barrier_done = np.zeros((args.num_envs,), dtype=bool)
+                while True:
+                    packed_obs, packed_mask, packed_card, _reward, packed_done, packed_trunc, _winner, _rt = (
+                        env.step_many_packed(barrier_wait_actions)
+                    )
+                    current_obs = packed_obs
+                    current_mask = packed_mask
+                    current_card = packed_card
+                    done_env = np.logical_or(packed_done, packed_trunc)
+                    barrier_done = np.logical_or(barrier_done, done_env)
+                    if live_view is not None and not live_view_failed:
+                        try:
+                            env_codes = [
+                                0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
+                                for tag in env_match_tag
+                            ]
+                            keep_open = live_view.update(
+                                env.debug_state_many(),
+                                {
+                                    "global_step": global_step,
+                                    "iteration": iteration,
+                                    "sps": int(global_step / max(1e-9, time.perf_counter() - train_start)),
+                                    "rollout_step": int(args.num_steps),
+                                    "rollout_total_steps": int(args.num_steps),
+                                    "steps_to_update": 0,
+                                    "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
+                                    "env_opponent_codes": env_codes,
+                                    "env_finished_flags": [bool(x) for x in barrier_done.tolist()],
+                                    "refresh_status": (
+                                        f"Barrier: {int(np.count_nonzero(barrier_done))}/{int(args.num_envs)}"
+                                    ),
+                                    "num_envs": int(args.num_envs),
+                                },
+                            )
+                            if not keep_open:
+                                live_view.close()
+                                live_view = None
+                        except Exception as exc:
+                            live_view_failed = True
+                            if live_view is not None:
+                                live_view.close()
+                                live_view = None
+                            print(f"[MIN] live viewer disabled after runtime error: {exc}")
+                    if bool(done_env.all()):
+                        break
+
+                pool.refresh_active()
+                last_refresh_wall = time.perf_counter()
+                refresh_status = f"Last Refresh: {0.0:.1f}s"
+                reset_options = [
+                    {
+                        "team_controllers": ["external" for _ in range(agent_count)],
+                        "training_mode": True,
+                        "ticks_per_step": int(args.cpp_tick_hz),
+                    }
+                    for _ in range(args.num_envs)
+                ]
+                reset_many_obs, _ = env.reset_many(
+                    seeds=[None for _ in range(args.num_envs)],
+                    options_per_env=reset_options,
+                )
+                for env_idx in range(args.num_envs):
+                    obs_entry = reset_many_obs[env_idx]
+                    if obs_entry is None:
+                        raise RuntimeError(f"barrier reset did not return observation for env {env_idx}")
+                    write_reset(env_idx, obs_entry)
+                    assign_env(env_idx)
+                next_obs, next_mask, next_card = stream_tensors()
+                next_done = torch.zeros((stream_count,), dtype=torch.float32, device=device)
+                print(f"[MIN] pool refresh barrier_s={time.perf_counter() - barrier_start:.3f}")
+            else:
+                refresh_status = f"Last Refresh: {max(0.0, time.perf_counter() - last_refresh_wall):.1f}s"
 
             update_s = time.perf_counter() - update_start
             should_log = int(args.log_every) <= 0 or (iteration % int(args.log_every) == 0)

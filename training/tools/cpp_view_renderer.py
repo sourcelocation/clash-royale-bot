@@ -87,6 +87,11 @@ def _entity_label(entity: dict[str, Any]) -> str:
     return f"{name}#{eid}"
 
 
+def _dim_color(color: tuple[int, int, int], factor: float = 0.35) -> tuple[int, int, int]:
+    r, g, b = color
+    return (_clamp_rgb(r * factor), _clamp_rgb(g * factor), _clamp_rgb(b * factor))
+
+
 class ArenaRenderer:
     def __init__(
         self,
@@ -272,6 +277,7 @@ class ArenaRenderer:
         cells = list(grid.get("cells", []))
         if not cells:
             return
+        dim_mask = [bool(x) for x in list(grid.get("dim_mask", []))]
         cols = max(1, int(grid.get("cols", 1)))
         rows = (len(cells) + cols - 1) // cols
         cell_size = max(8, int(grid.get("cell_size", 12)))
@@ -294,6 +300,8 @@ class ArenaRenderer:
                     break
                 code = int(cells[idx])
                 color = palette.get(code, (120, 120, 120))
+                if idx < len(dim_mask) and dim_mask[idx]:
+                    color = _dim_color(color)
                 rx = x0 + col * (cell_size + gap)
                 ry = y + row * (cell_size + gap)
                 self.pygame.draw.rect(self.screen, color, self.pygame.Rect(rx, ry, cell_size, cell_size))

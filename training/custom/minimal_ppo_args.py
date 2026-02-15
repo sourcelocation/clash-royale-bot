@@ -45,7 +45,7 @@ class Args:
     pool_active_recent_size: int = 2
     pool_active_anchor_size: int = 1
     pool_promote_every: int = 20
-    pool_refresh_every: int = 20
+    pool_refresh_every: int = 10
     pool_anchor_every: int = 4
     pool_latest_latest_prob: float = 0.4
     pool_latest_recent_prob: float = 0.5

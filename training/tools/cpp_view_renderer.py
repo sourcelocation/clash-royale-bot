@@ -157,7 +157,14 @@ class ArenaRenderer:
             self.close()
         return out
 
-    def draw(self, state: dict[str, Any], hud_lines: list[str], *, fps_limit: int) -> dict[str, float]:
+    def draw(
+        self,
+        state: dict[str, Any],
+        hud_lines: list[str],
+        *,
+        fps_limit: int,
+        hud_grid: dict[str, Any] | None = None,
+    ) -> dict[str, float]:
         if self.closed:
             return {"fps": 0.0, "arena_w": 1.0, "arena_h": 1.0, "aspect": 1.0}
 
@@ -249,6 +256,8 @@ class ArenaRenderer:
             surf = self.font.render(line, True, color)
             self.screen.blit(surf, (hx + 10, y))
             y += 18
+        if hud_grid is not None:
+            self._draw_hud_grid(hx=hx, hy=hy, hw=hw, hh=hh, start_y=y + 4, grid=hud_grid)
 
         self.pygame.display.flip()
         self.clock.tick(max(1, int(fps_limit)))
@@ -258,6 +267,51 @@ class ArenaRenderer:
             "arena_h": float(vh),
             "aspect": float(vw / max(1, vh)),
         }
+
+    def _draw_hud_grid(self, *, hx: int, hy: int, hw: int, hh: int, start_y: int, grid: dict[str, Any]) -> None:
+        cells = list(grid.get("cells", []))
+        if not cells:
+            return
+        cols = max(1, int(grid.get("cols", 1)))
+        rows = (len(cells) + cols - 1) // cols
+        cell_size = max(8, int(grid.get("cell_size", 12)))
+        gap = max(2, int(grid.get("gap", 2)))
+        title = str(grid.get("title", ""))
+        legend = list(grid.get("legend", []))
+        palette = dict(grid.get("palette", {}))
+
+        x0 = hx + 10
+        y = start_y
+        if title:
+            surf = self.font.render(title, True, (166, 210, 255))
+            self.screen.blit(surf, (x0, y))
+            y += 18
+
+        for row in range(rows):
+            for col in range(cols):
+                idx = row * cols + col
+                if idx >= len(cells):
+                    break
+                code = int(cells[idx])
+                color = palette.get(code, (120, 120, 120))
+                rx = x0 + col * (cell_size + gap)
+                ry = y + row * (cell_size + gap)
+                self.pygame.draw.rect(self.screen, color, self.pygame.Rect(rx, ry, cell_size, cell_size))
+                self.pygame.draw.rect(self.screen, (30, 34, 42), self.pygame.Rect(rx, ry, cell_size, cell_size), 1)
+        y += rows * (cell_size + gap) + 8
+
+        for item in legend:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", ""))
+            color = tuple(item.get("color", (120, 120, 120)))
+            if len(color) != 3:
+                color = (120, 120, 120)
+            self.pygame.draw.rect(self.screen, color, self.pygame.Rect(x0, y + 2, 12, 12))
+            self.pygame.draw.rect(self.screen, (30, 34, 42), self.pygame.Rect(x0, y + 2, 12, 12), 1)
+            surf = self.label_font.render(label, True, (235, 240, 245))
+            self.screen.blit(surf, (x0 + 18, y))
+            y += 16
 
     def _world_to_screen(self, x: float, y: float, width: int, height: int) -> tuple[int, int]:
         px = int((x + GRID_W / 2.0) / GRID_W * width)

@@ -5,8 +5,10 @@ An experiment to see how well can RL algorithms can learn how to play a simplifi
 This repository pairs a Godot 4 front-end with a PPO training loop that runs against a native C++ simulation (`cpp`) and the Python training stack
 (`training`).
 
-<img src="assets/game-godot.png" height="300" />
-<img src="assets/game-rewrite-cpp.png" height="300" />
+<p align="center">
+  <img src="assets/game-godot.png" width="49%" />
+  <img src="assets/game-rewrite-cpp.png" width="49%" />
+</p>
 
 ## Build
 
@@ -47,4 +49,3 @@ pytest training/tests/cpp_backend -q
 Validate determinism/stability with `pytest -m slow ...`, and experiment with
 `python -m training.tools.cpp_visualizer` if you need to inspect observations or
 masking logic.
-

@@ -54,9 +54,12 @@ class MaskedPPOAgent(nn.Module):
         self.cell_idx = self.branch_index["position_cell"]
 
         self.placement = config.placement
-        self._region_to_positions, self._region_cell_to_position = self._build_position_lookup()
+        region_positions, region_positions_valid, region_cell_to_position = self._build_position_lookup()
+        self.register_buffer("_region_positions", region_positions, persistent=False)
+        self.register_buffer("_region_positions_valid", region_positions_valid, persistent=False)
+        self.register_buffer("_region_cell_to_position", region_cell_to_position, persistent=False)
 
-    def _build_position_lookup(self) -> tuple[list[torch.Tensor], torch.Tensor]:
+    def _build_position_lookup(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         width = int(self.placement.grid_width)
         height = int(self.placement.grid_height)
         region_cols = max(1, int(self.placement.region_cols))
@@ -82,7 +85,18 @@ class MaskedPPOAgent(nn.Module):
                     region_cell_to_position[region, cell] = pos_index
                 region_to_positions[region].append(pos_index)
 
-        return [torch.tensor(v, dtype=torch.long) for v in region_to_positions], region_cell_to_position
+        max_positions = max((len(v) for v in region_to_positions), default=0)
+        if max_positions <= 0:
+            max_positions = 1
+        region_positions = torch.full((region_count, max_positions), -1, dtype=torch.long)
+        region_positions_valid = torch.zeros((region_count, max_positions), dtype=torch.bool)
+        for region, positions in enumerate(region_to_positions):
+            if not positions:
+                continue
+            count = len(positions)
+            region_positions[region, :count] = torch.tensor(positions, dtype=torch.long)
+            region_positions_valid[region, :count] = True
+        return region_positions, region_positions_valid, region_cell_to_position
 
     def get_value(self, x: torch.Tensor) -> torch.Tensor:
         return self.model.value(x).unsqueeze(-1)
@@ -114,35 +128,32 @@ class MaskedPPOAgent(nn.Module):
     def _build_region_mask(self, selected_card_position_mask: torch.Tensor) -> torch.Tensor:
         # selected_card_position_mask: [B, positions]
         batch = selected_card_position_mask.shape[0]
-        device = selected_card_position_mask.device
         dtype = selected_card_position_mask.dtype
-        region_masks = torch.zeros((batch, len(self._region_to_positions)), dtype=dtype, device=device)
-        for region, pos_idx in enumerate(self._region_to_positions):
-            if pos_idx.numel() == 0:
-                continue
-            idx = pos_idx.to(device)
-            region_masks[:, region] = selected_card_position_mask.index_select(dim=1, index=idx).max(dim=1).values
-        return region_masks
+        region_positions = self._region_positions
+        region_positions_valid = self._region_positions_valid
+        region_count, positions_per_region = region_positions.shape
+
+        gather_index = region_positions.clamp(min=0).unsqueeze(0).expand(batch, region_count, positions_per_region)
+        gathered = selected_card_position_mask.gather(dim=1, index=gather_index.reshape(batch, -1)).reshape(
+            batch, region_count, positions_per_region
+        )
+        valid = region_positions_valid.to(dtype=dtype).unsqueeze(0)
+        return (gathered * valid).amax(dim=2)
 
     def _build_cell_mask(
         self, selected_card_position_mask: torch.Tensor, selected_regions: torch.Tensor
     ) -> torch.Tensor:
-        batch, _positions = selected_card_position_mask.shape
-        device = selected_card_position_mask.device
+        _batch, _positions = selected_card_position_mask.shape
         dtype = selected_card_position_mask.dtype
         region_count, cell_count = self._region_cell_to_position.shape
-        cell_masks = torch.zeros((batch, cell_count), dtype=dtype, device=device)
-        region_lookup = self._region_cell_to_position.to(device)
-        for b in range(batch):
-            region = int(selected_regions[b].item())
-            if region < 0 or region >= region_count:
-                continue
-            pos_idx = region_lookup[region]
-            valid_cells = pos_idx >= 0
-            if valid_cells.any():
-                selected = selected_card_position_mask[b, pos_idx[valid_cells]]
-                cell_masks[b, valid_cells] = selected
-        return cell_masks
+        clamped_regions = selected_regions.clamp(min=0, max=max(0, region_count - 1))
+        region_ok = ((selected_regions >= 0) & (selected_regions < region_count)).to(dtype=dtype).unsqueeze(-1)
+
+        pos_idx = self._region_cell_to_position[clamped_regions]
+        valid_cells = pos_idx >= 0
+        selected = selected_card_position_mask.gather(dim=1, index=pos_idx.clamp(min=0))
+        cell_masks = selected * valid_cells.to(dtype=dtype)
+        return cell_masks * region_ok
 
     def get_action_and_value(
         self,
@@ -218,5 +229,5 @@ class MaskedPPOAgent(nn.Module):
         else:
             out_action = action
 
-        value = self.model.value(x)
-        return out_action, logprob, entropy, value.unsqueeze(-1), region_mask_used, cell_mask_used
+        value = self.model.value_head(features)
+        return out_action, logprob, entropy, value, region_mask_used, cell_mask_used

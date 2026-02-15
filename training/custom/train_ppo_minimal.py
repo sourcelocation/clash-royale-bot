@@ -1,4 +1,4 @@
-"""CLI entrypoint for the minimal custom PPO trainer."""
+"""Entry point for the minimal PPO rewrite."""
 
 import tyro
 
@@ -12,3 +12,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

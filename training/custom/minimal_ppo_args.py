@@ -38,6 +38,7 @@ class Args:
     ckpt_every: int = 100
     visualize: bool = False
     visualize_fps: int = 60
+    sim_speed_mode: str = "max"  # one of: max, 1x
 
     pool_enabled: bool = True
     pool_recent_capacity: int = 32
@@ -45,13 +46,14 @@ class Args:
     pool_active_recent_size: int = 2
     pool_active_anchor_size: int = 1
     pool_promote_every: int = 20
-    pool_refresh_every: int = 10
+    pool_refresh_every: int = 128
     pool_anchor_every: int = 4
     pool_latest_latest_prob: float = 0.4
     pool_latest_recent_prob: float = 0.5
     pool_latest_anchor_prob: float = 0.1
     pool_deterministic: bool = True
 
-    elo_enabled: bool = True
-    elo_initial: float = 1000.0
-    elo_k: float = 16.0
+    benchmark_enabled: bool = True
+    benchmark_initial: float = 1000.0
+    benchmark_k: float = 8.0
+    benchmark_ema_alpha: float = 0.1

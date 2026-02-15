@@ -133,6 +133,7 @@ class ArenaRenderer:
             "esc": False,
             "left": False,
             "right": False,
+            "speed_cycle": False,
         }
         if self.closed:
             out["quit"] = True
@@ -158,6 +159,8 @@ class ArenaRenderer:
                     out["left"] = True
                 elif event.key == self.pygame.K_RIGHT:
                     out["right"] = True
+                elif event.key == self.pygame.K_t:
+                    out["speed_cycle"] = True
         if out["quit"]:
             self.close()
         return out

@@ -298,11 +298,6 @@ void ClashEnv::apply_damage(Entity& target, int dmg, int source_team, int source
         episode_done_ = true;
         reset_requested_ = true;
     }
-    if (target.card_id == kCardHog) {
-        const int stopper_team = 1 - target.team;
-        add_reward(stopper_team, kHogStopReward, "hog_stopped");
-        add_reward(target.team, -kHogStopReward, "hog_lost");
-    }
     if (target.card_id == kCardIceGolem) {
         const auto& card = cards_[kCardIceGolem];
         for (auto& other : entities_) {
@@ -323,22 +318,8 @@ void ClashEnv::apply_damage(Entity& target, int dmg, int source_team, int source
     (void)from_spell;
 }
 void ClashEnv::resolve_spell_reward(int caster_team, int hit_count) {
-    if (episode_done_ || episode_truncated_) {
-        return;
-    }
-    if (caster_team < 0 || caster_team >= 2) {
-        return;
-    }
-    const int enemy_team = 1 - caster_team;
-    if (hit_count <= 0) {
-        add_reward(caster_team, -kSpellMissPenalty, "spell_miss");
-        add_reward(enemy_team, kSpellMissPenalty, "enemy_spell_miss");
-        return;
-    }
-    const int clamped = std::min(hit_count, kSpellHitRewardMaxTargets);
-    const double bonus = static_cast<double>(clamped) * kSpellHitReward;
-    add_reward(caster_team, bonus, "spell_hit");
-    add_reward(enemy_team, -bonus, "enemy_spell_hit_taken");
+    (void)caster_team;
+    (void)hit_count;
 }
 void ClashEnv::process_fireballs() {
     std::vector<int> remove;

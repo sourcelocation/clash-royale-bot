@@ -39,6 +39,31 @@ def _next_experiment_dir(run_root: Path) -> Path:
     return run_root / f"exp_{max_index + 1:04d}"
 
 
+def _normalize_sim_speed_mode(raw: str) -> str:
+    mode = str(raw).strip().lower()
+    if mode in ("max", "1x"):
+        return mode
+    raise ValueError(f"sim_speed_mode must be one of max, 1x; got={raw!r}")
+
+
+def _tick_delay_seconds_for_mode(mode: str, tick_hz: int) -> float:
+    hz = float(max(1, int(tick_hz)))
+    if mode == "max":
+        return 0.0
+    if mode == "1x":
+        return 1.0 / hz
+    raise ValueError(f"Unsupported sim speed mode: {mode}")
+
+
+def _sim_speed_label(mode: str, tick_hz: int) -> str:
+    hz = max(1, int(tick_hz))
+    if mode == "max":
+        return f"{mode} (delay 0.000s/tick)"
+    if mode == "1x":
+        return f"{mode} (delay {1.0 / float(hz):.3f}s/tick)"
+    return mode
+
+
 class _TrainingVisualizer:
     def __init__(self, fps: int):
         from training.tools.cpp_view_renderer import ArenaRenderer, kv
@@ -48,6 +73,7 @@ class _TrainingVisualizer:
         self._kv = kv
         self.renderer = ArenaRenderer(title="minimal ppo live view", width=1100, height=620, headless=False)
         self.collapsed = False
+        self._speed_cycle_requested = False
 
     def update(self, states: list[dict[str, Any]], metrics: dict[str, Any]) -> bool:
         events = self.renderer.poll_events(esc_quit=False)
@@ -55,6 +81,8 @@ class _TrainingVisualizer:
             return False
         if events["esc"]:
             self.collapsed = not self.collapsed
+        if events.get("speed_cycle", False):
+            self._speed_cycle_requested = True
         if states:
             if events["left"]:
                 self.env_index = (self.env_index - 1) % len(states)
@@ -76,27 +104,33 @@ class _TrainingVisualizer:
         progress_pct = 100.0 * float(metrics.get("progress_frac", 0.0))
         refresh_status = str(metrics.get("refresh_status", "Last Refresh: -"))
         env_finished_flags = [bool(x) for x in metrics.get("env_finished_flags", [])]
-        elo_current = float(metrics.get("elo_current", 0.0))
-        elo_games = int(metrics.get("elo_games", 0))
-        elo_win_rate = float(metrics.get("elo_win_rate", 0.0))
+        samples_per_second = int(metrics.get("samples_per_second", metrics.get("sps", 0)))
+        env_steps_per_second = float(metrics.get("env_steps_per_second", 0.0))
+        benchmark_current = float(metrics.get("benchmark_current", 0.0))
+        benchmark_games = int(metrics.get("benchmark_games", 0))
+        benchmark_win_rate = float(metrics.get("benchmark_win_rate", 0.0))
+        sim_speed_label = str(metrics.get("sim_speed_label", "max"))
         if self.collapsed:
             lines = [
                 "[MINIMAL TRAINING VIEW]",
                 "Collapsed mode: training running in background",
                 self._kv("Global step", str(int(metrics.get("global_step", 0)))),
                 self._kv("Iteration", str(int(metrics.get("iteration", 0)))),
-                self._kv("SPS", str(int(metrics.get("sps", 0)))),
+                self._kv("Samples/s", str(samples_per_second)),
+                self._kv("Env steps/s", f"{env_steps_per_second:.2f}"),
                 self._kv("Rollout step", f"{rollout_step}/{total_rollout_steps}"),
                 self._kv("Steps to update", str(steps_to_update)),
                 self._kv("Progress", f"{progress_pct:.1f}%"),
                 self._kv("Refresh", refresh_status),
-                self._kv("ELO", f"{elo_current:.1f}"),
-                self._kv("ELO games", str(elo_games)),
-                self._kv("ELO WR", f"{100.0 * elo_win_rate:.1f}%"),
+                self._kv("Sim speed", sim_speed_label),
+                self._kv("Benchmark", f"{benchmark_current:.1f}"),
+                self._kv("Benchmark games", str(benchmark_games)),
+                self._kv("Benchmark WR", f"{100.0 * benchmark_win_rate:.1f}%"),
                 self._kv("Env", str(self.env_index)),
                 "",
                 "Press Esc to restore full preview",
                 "Left/Right: switch env",
+                "T: toggle throttle (max/1x)",
                 "Close window to disable viewer",
             ]
             self.renderer.draw(
@@ -128,14 +162,16 @@ class _TrainingVisualizer:
             self._kv("Env index", str(self.env_index)),
             self._kv("Global step", str(int(metrics.get("global_step", 0)))),
             self._kv("Iteration", str(int(metrics.get("iteration", 0)))),
-            self._kv("SPS", str(int(metrics.get("sps", 0)))),
+            self._kv("Samples/s", str(samples_per_second)),
+            self._kv("Env steps/s", f"{env_steps_per_second:.2f}"),
             self._kv("Rollout step", f"{rollout_step}/{total_rollout_steps}"),
             self._kv("Steps to update", str(steps_to_update)),
             self._kv("Progress", f"{progress_pct:.1f}%"),
             self._kv("Refresh", refresh_status),
-            self._kv("ELO", f"{elo_current:.1f}"),
-            self._kv("ELO games", str(elo_games)),
-            self._kv("ELO WR", f"{100.0 * elo_win_rate:.1f}%"),
+            self._kv("Sim speed", sim_speed_label),
+            self._kv("Benchmark", f"{benchmark_current:.1f}"),
+            self._kv("Benchmark games", str(benchmark_games)),
+            self._kv("Benchmark WR", f"{100.0 * benchmark_win_rate:.1f}%"),
             "",
             "[ENV]",
             self._kv("Sim time", f"{float(state.get('sim_time_s', 0.0)):.2f}s"),
@@ -148,6 +184,7 @@ class _TrainingVisualizer:
             "",
             "Esc: Collapse preview",
             "Left/Right: Switch env",
+            "T: Toggle throttle",
             "Close window: disable viewer",
         ]
         self.renderer.draw(
@@ -176,6 +213,11 @@ class _TrainingVisualizer:
 
     def close(self) -> None:
         self.renderer.close()
+
+    def pop_speed_cycle_requested(self) -> bool:
+        requested = self._speed_cycle_requested
+        self._speed_cycle_requested = False
+        return requested
 
 
 @dataclass
@@ -300,35 +342,64 @@ class _GpuOpponentPool:
         return "latest_latest", None
 
 
-class _EloTracker:
-    def __init__(self, *, initial: float, k_factor: float):
+class _BenchmarkTracker:
+    def __init__(self, *, initial: float, k_factor: float, ema_alpha: float):
         self.current_rating = float(initial)
         self.initial = float(initial)
         self.k_factor = float(k_factor)
+        self.ema_alpha = float(np.clip(ema_alpha, 0.0, 1.0))
         self.opponent_ratings: dict[int, float] = {}
         self.total_games = 0
         self.total_wins = 0
         self.total_draws = 0
         self.total_losses = 0
+        self.last_batch_games = 0
+        self.last_batch_score = 0.5
+        self.smoothed_batch_score = 0.5
 
     def _expected(self, r_a: float, r_b: float) -> float:
         return 1.0 / (1.0 + 10.0 ** ((r_b - r_a) / 400.0))
 
-    def record_vs_checkpoint(self, *, checkpoint_step: int, score_current: float) -> tuple[float, float]:
-        opp_rating = float(self.opponent_ratings.get(int(checkpoint_step), self.initial))
-        e_cur = self._expected(self.current_rating, opp_rating)
-        e_opp = self._expected(opp_rating, self.current_rating)
-        self.current_rating = float(self.current_rating + self.k_factor * (float(score_current) - e_cur))
-        opp_new = float(opp_rating + self.k_factor * ((1.0 - float(score_current)) - e_opp))
-        self.opponent_ratings[int(checkpoint_step)] = opp_new
-        self.total_games += 1
-        if score_current >= 0.999:
-            self.total_wins += 1
-        elif score_current <= 0.001:
-            self.total_losses += 1
+    def record_batch(self, samples: list[tuple[int, float]]) -> float:
+        if not samples:
+            self.last_batch_games = 0
+            self.last_batch_score = 0.5
+            return self.current_rating
+
+        grouped_scores: dict[int, list[float]] = {}
+        for checkpoint_step, score in samples:
+            grouped_scores.setdefault(int(checkpoint_step), []).append(float(score))
+            self.total_games += 1
+            if score >= 0.999:
+                self.total_wins += 1
+            elif score <= 0.001:
+                self.total_losses += 1
+            else:
+                self.total_draws += 1
+
+        total_n = sum(len(v) for v in grouped_scores.values())
+        delta_cur = 0.0
+        for checkpoint_step, scores in grouped_scores.items():
+            n = len(scores)
+            if n <= 0:
+                continue
+            avg_score = float(sum(scores) / float(n))
+            weight = float(n) / float(total_n)
+            opp_rating = float(self.opponent_ratings.get(int(checkpoint_step), self.initial))
+            expected_cur = self._expected(self.current_rating, opp_rating)
+            group_delta = self.k_factor * weight * (avg_score - expected_cur)
+            delta_cur += group_delta
+            self.opponent_ratings[int(checkpoint_step)] = float(opp_rating - group_delta)
+
+        self.current_rating = float(self.current_rating + delta_cur)
+        self.last_batch_games = int(total_n)
+        self.last_batch_score = float(sum(score for _, score in samples) / float(total_n))
+        alpha = self.ema_alpha
+        if self.total_games == total_n:
+            self.smoothed_batch_score = self.last_batch_score
         else:
-            self.total_draws += 1
-        return self.current_rating, opp_new
+            self.smoothed_batch_score = float(alpha * self.last_batch_score + (1.0 - alpha) * self.smoothed_batch_score)
+        return self.current_rating
 
     @property
     def win_rate(self) -> float:
@@ -386,13 +457,22 @@ def run_training(args: Args) -> None:
         if agent_count != 2:
             raise ValueError(f"Minimal pool trainer currently supports exactly 2 agents, got {agent_count}")
 
+        sim_speed_mode = _normalize_sim_speed_mode(args.sim_speed_mode)
+        fixed_ticks_per_step = 1
+        tick_delay_s = _tick_delay_seconds_for_mode(sim_speed_mode, int(args.cpp_tick_hz))
+
+        def build_reset_options(count: int) -> list[dict]:
+            return [
+                {
+                    "team_controllers": ["external" for _ in range(agent_count)],
+                    "training_mode": True,
+                    "ticks_per_step": int(fixed_ticks_per_step),
+                }
+                for _ in range(count)
+            ]
+
         reset_options = [
-            {
-                "team_controllers": ["external" for _ in range(agent_count)],
-                "training_mode": True,
-                "ticks_per_step": int(args.cpp_tick_hz),
-            }
-            for _ in range(args.num_envs)
+            opt for opt in build_reset_options(args.num_envs)
         ]
         reset_obs, _ = env.reset_many(
             seeds=[int(args.seed) + i for i in range(args.num_envs)],
@@ -466,7 +546,12 @@ def run_training(args: Args) -> None:
         env_match_tag: list[str] = ["latest_latest" for _ in range(args.num_envs)]
         env_latest_team = np.full((args.num_envs,), -1, dtype=np.int32)
         env_opp_checkpoint_step = np.full((args.num_envs,), -1, dtype=np.int64)
-        elo_tracker = _EloTracker(initial=float(args.elo_initial), k_factor=float(args.elo_k))
+        benchmark_tracker = _BenchmarkTracker(
+            initial=float(args.benchmark_initial),
+            k_factor=float(args.benchmark_k),
+            ema_alpha=float(args.benchmark_ema_alpha),
+        )
+        pending_benchmark_samples: list[tuple[int, float]] = []
 
         assign_rng = np.random.default_rng(int(args.seed) + 17)
 
@@ -534,7 +619,18 @@ def run_training(args: Args) -> None:
         refresh_status = f"Last Refresh: {0.0:.1f}s"
 
         global_step = 0
+        env_batch_steps = 0
         train_start = time.perf_counter()
+
+        def cycle_sim_speed_mode() -> None:
+            nonlocal sim_speed_mode, tick_delay_s
+            modes = ("max", "1x")
+            idx = modes.index(sim_speed_mode)
+            sim_speed_mode = modes[(idx + 1) % len(modes)]
+            tick_delay_s = _tick_delay_seconds_for_mode(sim_speed_mode, int(args.cpp_tick_hz))
+            print(f"[MIN] sim speed mode -> {_sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz))}")
+
+        print(f"[MIN] sim speed mode={_sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz))}")
 
         for iteration in range(1, num_iterations + 1):
             if args.anneal_lr:
@@ -588,9 +684,13 @@ def run_training(args: Args) -> None:
                 actions_per_env[:] = wait_action
                 actions_per_env[stream_env, stream_team] = action_np
 
+                if tick_delay_s > 0.0:
+                    time.sleep(tick_delay_s)
+
                 packed_obs, packed_mask, packed_card, packed_reward, packed_done, packed_trunc, packed_winner, _rt = (
                     env.step_many_packed(actions_per_env)
                 )
+                env_batch_steps += 1
                 current_obs = packed_obs
                 current_mask = packed_mask
                 current_card = packed_card
@@ -602,7 +702,7 @@ def run_training(args: Args) -> None:
                 next_done = torch.as_tensor(done_env[stream_env].astype(np.float32), dtype=torch.float32, device=device)
 
                 done_ids = np.flatnonzero(done_env)
-                if bool(args.elo_enabled) and done_ids.size > 0:
+                if bool(args.benchmark_enabled) and done_ids.size > 0:
                     for env_idx in done_ids:
                         env_i = int(env_idx)
                         tag = env_match_tag[env_i]
@@ -619,10 +719,7 @@ def run_training(args: Args) -> None:
                             score_current = 1.0
                         else:
                             score_current = 0.0
-                        elo_tracker.record_vs_checkpoint(
-                            checkpoint_step=checkpoint_step,
-                            score_current=score_current,
-                        )
+                        pending_benchmark_samples.append((checkpoint_step, score_current))
 
                 if done_ids.size > 0:
                     options: list[dict | None] = [None for _ in range(args.num_envs)]
@@ -630,7 +727,7 @@ def run_training(args: Args) -> None:
                         options[int(env_idx)] = {
                             "team_controllers": ["external" for _ in range(agent_count)],
                             "training_mode": True,
-                            "ticks_per_step": int(args.cpp_tick_hz),
+                            "ticks_per_step": int(fixed_ticks_per_step),
                         }
                     reset_many_obs, _ = env.reset_many(
                         seeds=[None for _ in range(args.num_envs)],
@@ -650,30 +747,35 @@ def run_training(args: Args) -> None:
                             refresh_label = refresh_status
                             if refresh_label.startswith("Last Refresh:"):
                                 refresh_label = f"Last Refresh: {max(0.0, now - last_refresh_wall):.1f}s"
-                            env_codes = [
-                                0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
-                                for tag in env_match_tag
-                            ]
-                            rollout_step = int(step + 1)
-                            keep_open = live_view.update(
-                                env.debug_state_many(),
-                                {
-                                    "global_step": global_step,
-                                    "iteration": iteration,
-                                    "sps": int(global_step / max(1e-9, now - train_start)),
-                                    "rollout_step": rollout_step,
-                                    "rollout_total_steps": int(args.num_steps),
-                                    "steps_to_update": max(0, int(args.num_steps) - rollout_step),
+                                env_codes = [
+                                    0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
+                                    for tag in env_match_tag
+                                ]
+                                elapsed = max(1e-9, now - train_start)
+                                rollout_step = int(step + 1)
+                                keep_open = live_view.update(
+                                    env.debug_state_many(),
+                                    {
+                                        "global_step": global_step,
+                                        "iteration": iteration,
+                                        "samples_per_second": int(global_step / elapsed),
+                                        "env_steps_per_second": float(env_batch_steps) / elapsed,
+                                        "rollout_step": rollout_step,
+                                        "rollout_total_steps": int(args.num_steps),
+                                        "steps_to_update": max(0, int(args.num_steps) - rollout_step),
                                     "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
                                     "env_opponent_codes": env_codes,
                                     "env_finished_flags": [bool(x) for x in done_env.tolist()],
                                     "refresh_status": refresh_label,
-                                    "elo_current": float(elo_tracker.current_rating),
-                                    "elo_games": int(elo_tracker.total_games),
-                                    "elo_win_rate": float(elo_tracker.win_rate),
+                                    "sim_speed_label": _sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz)),
+                                    "benchmark_current": float(benchmark_tracker.current_rating),
+                                    "benchmark_games": int(benchmark_tracker.total_games),
+                                    "benchmark_win_rate": float(benchmark_tracker.win_rate),
                                     "num_envs": int(args.num_envs),
                                 },
                             )
+                            if live_view is not None and live_view.pop_speed_cycle_requested():
+                                cycle_sim_speed_mode()
                             next_view_update_at = now + (1.0 / max(1, int(args.visualize_fps)))
                             if not keep_open:
                                 live_view.close()
@@ -774,6 +876,10 @@ def run_training(args: Args) -> None:
                 if args.target_kl is not None and float(approx_kl.item()) > float(args.target_kl):
                     break
 
+            if bool(args.benchmark_enabled):
+                benchmark_tracker.record_batch(pending_benchmark_samples)
+                pending_benchmark_samples.clear()
+
             if pool.should_promote(iteration):
                 pool.promote(agent, step=global_step)
 
@@ -782,9 +888,12 @@ def run_training(args: Args) -> None:
                 barrier_start = time.perf_counter()
                 barrier_done = np.zeros((args.num_envs,), dtype=bool)
                 while True:
+                    if tick_delay_s > 0.0:
+                        time.sleep(tick_delay_s)
                     packed_obs, packed_mask, packed_card, _reward, packed_done, packed_trunc, _winner, _rt = (
                         env.step_many_packed(barrier_wait_actions)
                     )
+                    env_batch_steps += 1
                     current_obs = packed_obs
                     current_mask = packed_mask
                     current_card = packed_card
@@ -798,12 +907,14 @@ def run_training(args: Args) -> None:
                                     0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
                                     for tag in env_match_tag
                                 ]
+                                elapsed = max(1e-9, now - train_start)
                                 keep_open = live_view.update(
                                     env.debug_state_many(),
                                     {
                                         "global_step": global_step,
                                         "iteration": iteration,
-                                        "sps": int(global_step / max(1e-9, now - train_start)),
+                                        "samples_per_second": int(global_step / elapsed),
+                                        "env_steps_per_second": float(env_batch_steps) / elapsed,
                                         "rollout_step": int(args.num_steps),
                                         "rollout_total_steps": int(args.num_steps),
                                         "steps_to_update": 0,
@@ -813,12 +924,15 @@ def run_training(args: Args) -> None:
                                         "refresh_status": (
                                             f"Barrier: {int(np.count_nonzero(barrier_done))}/{int(args.num_envs)}"
                                         ),
-                                        "elo_current": float(elo_tracker.current_rating),
-                                        "elo_games": int(elo_tracker.total_games),
-                                        "elo_win_rate": float(elo_tracker.win_rate),
+                                        "sim_speed_label": _sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz)),
+                                        "benchmark_current": float(benchmark_tracker.current_rating),
+                                        "benchmark_games": int(benchmark_tracker.total_games),
+                                        "benchmark_win_rate": float(benchmark_tracker.win_rate),
                                         "num_envs": int(args.num_envs),
                                     },
                                 )
+                                if live_view is not None and live_view.pop_speed_cycle_requested():
+                                    cycle_sim_speed_mode()
                                 next_view_update_at = now + (1.0 / max(1, int(args.visualize_fps)))
                                 if not keep_open:
                                     live_view.close()
@@ -836,12 +950,7 @@ def run_training(args: Args) -> None:
                 last_refresh_wall = time.perf_counter()
                 refresh_status = f"Last Refresh: {0.0:.1f}s"
                 reset_options = [
-                    {
-                        "team_controllers": ["external" for _ in range(agent_count)],
-                        "training_mode": True,
-                        "ticks_per_step": int(args.cpp_tick_hz),
-                    }
-                    for _ in range(args.num_envs)
+                    opt for opt in build_reset_options(args.num_envs)
                 ]
                 reset_many_obs, _ = env.reset_many(
                     seeds=[None for _ in range(args.num_envs)],
@@ -863,7 +972,8 @@ def run_training(args: Args) -> None:
             should_log = int(args.log_every) <= 0 or (iteration % int(args.log_every) == 0)
             if should_log:
                 elapsed = max(1e-9, time.perf_counter() - train_start)
-                sps = int(global_step / elapsed)
+                sample_sps = int(global_step / elapsed)
+                env_step_sps = float(env_batch_steps) / elapsed
                 clipfrac = float((clipfrac_sum / max(1, clipfrac_count)).item())
                 ll = int(sum(1 for t in env_match_tag if t == "latest_latest"))
                 lr = int(sum(1 for t in env_match_tag if t == "latest_recent"))
@@ -873,14 +983,18 @@ def run_training(args: Args) -> None:
                 trainable_ratio = float(active_size) / float(max(1, int(b_train.numel())))
                 pool_active_total = int(len(pool.active_recent_ids) + len(pool.active_anchor_ids))
                 print(
-                    f"[MIN] iter={iteration}/{num_iterations} step={global_step} sps={sps} "
+                    f"[MIN] iter={iteration}/{num_iterations} step={global_step} sample_sps={sample_sps} "
+                    f"env_step_sps={env_step_sps:.2f} "
                     f"rollout_s={rollout_s:.3f} update_s={update_s:.3f} "
                     f"pg={float(pg_loss.item()):.4f} v={float(v_loss.item()):.4f} kl={float(approx_kl.item()):.5f} "
                     f"cf={clipfrac:.4f} mix(ll/lr/la)={ll}/{lr}/{la} "
-                    f"elo={float(elo_tracker.current_rating):.1f} games={int(elo_tracker.total_games)} "
+                    f"speed={_sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz))} "
+                    f"bench={float(benchmark_tracker.current_rating):.1f} games={int(benchmark_tracker.total_games)} "
+                    f"batch_score={float(benchmark_tracker.last_batch_score):.3f} "
                     f"active_pool(r/a)={len(pool.active_recent_ids)}/{len(pool.active_anchor_ids)}"
                 )
-                writer.add_scalar("charts/sps", sps, global_step)
+                writer.add_scalar("charts/samples_per_second", sample_sps, global_step)
+                writer.add_scalar("charts/env_steps_per_second", env_step_sps, global_step)
                 writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
                 writer.add_scalar("timing/iteration_seconds", iter_s, global_step)
                 writer.add_scalar("timing/rollout_seconds", rollout_s, global_step)
@@ -895,10 +1009,17 @@ def run_training(args: Args) -> None:
                 writer.add_scalar("pool/latest_anchor_ratio", float(la) / float(env_count), global_step)
                 writer.add_scalar("pool/trainable_sample_ratio", trainable_ratio, global_step)
                 writer.add_scalar("pool/active_policy_count", pool_active_total, global_step)
-                if bool(args.elo_enabled):
-                    writer.add_scalar("selfplay/elo_current", float(elo_tracker.current_rating), global_step)
-                    writer.add_scalar("selfplay/elo_games", float(elo_tracker.total_games), global_step)
-                    writer.add_scalar("selfplay/elo_win_rate", float(elo_tracker.win_rate), global_step)
+                if bool(args.benchmark_enabled):
+                    writer.add_scalar("benchmark/rating", float(benchmark_tracker.current_rating), global_step)
+                    writer.add_scalar("benchmark/games_total", float(benchmark_tracker.total_games), global_step)
+                    writer.add_scalar("benchmark/win_rate", float(benchmark_tracker.win_rate), global_step)
+                    writer.add_scalar("benchmark/batch_games", float(benchmark_tracker.last_batch_games), global_step)
+                    writer.add_scalar("benchmark/batch_score", float(benchmark_tracker.last_batch_score), global_step)
+                    writer.add_scalar(
+                        "benchmark/batch_score_ema",
+                        float(benchmark_tracker.smoothed_batch_score),
+                        global_step,
+                    )
 
             if int(args.ckpt_every) > 0 and iteration % int(args.ckpt_every) == 0:
                 ckpt_path = experiment_dir / f"ckpt_iter_{iteration:06d}.pt"
@@ -914,33 +1035,43 @@ def run_training(args: Args) -> None:
                 )
 
         total_s = max(1e-9, time.perf_counter() - train_start)
+        overall_sample_sps = float(global_step / total_s)
+        overall_env_step_sps = float(env_batch_steps) / total_s
         summary = {
             "experiment_dir": str(experiment_dir),
             "tensorboard_dir": str(tb_dir),
             "global_step": int(global_step),
             "num_iterations": int(num_iterations),
-            "overall_sps": float(global_step / total_s),
+            "overall_sps": overall_sample_sps,
+            "overall_sample_sps": overall_sample_sps,
+            "overall_env_step_sps": overall_env_step_sps,
             "device": str(device),
             "num_envs": int(args.num_envs),
             "num_steps": int(args.num_steps),
             "batch_size": int(batch_size),
             "pool_enabled": bool(args.pool_enabled),
+            "sim_speed_mode": str(sim_speed_mode),
+            "ticks_per_step": int(fixed_ticks_per_step),
+            "tick_delay_seconds": float(tick_delay_s),
             "active_recent": int(len(pool.active_recent_ids)),
             "active_anchor": int(len(pool.active_anchor_ids)),
-            "elo_enabled": bool(args.elo_enabled),
-            "elo_current": float(elo_tracker.current_rating),
-            "elo_games": int(elo_tracker.total_games),
-            "elo_win_rate": float(elo_tracker.win_rate),
+            "benchmark_enabled": bool(args.benchmark_enabled),
+            "benchmark_rating": float(benchmark_tracker.current_rating),
+            "benchmark_games": int(benchmark_tracker.total_games),
+            "benchmark_win_rate": float(benchmark_tracker.win_rate),
+            "benchmark_batch_score_ema": float(benchmark_tracker.smoothed_batch_score),
         }
         (experiment_dir / "timing_summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         writer.add_scalar("timing/overall_sps", summary["overall_sps"], int(global_step))
+        writer.add_scalar("timing/overall_env_step_sps", overall_env_step_sps, int(global_step))
         writer.flush()
         print(
             f"[MIN] done exp={experiment_dir.name} step={global_step} "
-            f"sps={summary['overall_sps']:.2f} device={device}"
+            f"sample_sps={summary['overall_sample_sps']:.2f} env_step_sps={summary['overall_env_step_sps']:.2f} "
+            f"device={device}"
         )
     finally:
         if live_view is not None:

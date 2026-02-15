@@ -143,27 +143,9 @@ PlayResult ClashEnv::play_card_with_reason(int team, int card_id, int action_x, 
         out.reason = "illegal_position";
         return out;
     }
-    const auto hand = hand_for_team(team);
-    const int hog_cost = cards_[kCardHog].cost;
-    const bool should_penalize_cheap_cycle_play = (
-        std::find(hand.begin(), hand.end(), kCardHog) != hand.end() &&
-        elixir_[team] < hog_cost &&
-        card_id != kCardHog &&
-        card.cost <= kCheapCardMaxCost
-    );
     elixir_[team] -= static_cast<double>(card.cost);
     elixir_[team] = clampd(elixir_[team], 0.0, max_elixir_);
     cycle_deck_after_play(team, card_id);
-    if (card.type == CARD_BUILDING) {
-        if (action_y <= kBuildingBacklineMaxRow) {
-            const int depth = (kBuildingBacklineMaxRow - action_y + 1);
-            const double penalty = static_cast<double>(depth) * kBuildingBacklinePenaltyBase;
-            add_reward(team, -penalty, "building_backline");
-        }
-    }
-    if (should_penalize_cheap_cycle_play) {
-        add_reward(team, -kCheapCyclePenalty, "cheap_cycle_play");
-    }
     const auto [ix, iy] = action_to_internal_grid(team, action_x, action_y);
     const auto [wx, wy] = internal_to_world(ix, iy);
     PendingSpawn p;

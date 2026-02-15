@@ -370,10 +370,12 @@ def run_training(args: Args) -> None:
     )
     live_view: _TrainingVisualizer | None = None
     live_view_failed = False
+    next_view_update_at = 0.0
     try:
         if bool(args.visualize):
             try:
                 live_view = _TrainingVisualizer(fps=int(args.visualize_fps))
+                next_view_update_at = time.perf_counter()
                 print(f"[MIN] live viewer enabled fps={int(args.visualize_fps)}")
             except Exception as exc:
                 live_view_failed = True
@@ -643,36 +645,39 @@ def run_training(args: Args) -> None:
 
                 if live_view is not None and not live_view_failed:
                     try:
-                        refresh_label = refresh_status
-                        if refresh_label.startswith("Last Refresh:"):
-                            refresh_label = f"Last Refresh: {max(0.0, time.perf_counter() - last_refresh_wall):.1f}s"
-                        env_codes = [
-                            0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
-                            for tag in env_match_tag
-                        ]
-                        rollout_step = int(step + 1)
-                        keep_open = live_view.update(
-                            env.debug_state_many(),
-                            {
-                                "global_step": global_step,
-                                "iteration": iteration,
-                                "sps": int(global_step / max(1e-9, time.perf_counter() - train_start)),
-                                "rollout_step": rollout_step,
-                                "rollout_total_steps": int(args.num_steps),
-                                "steps_to_update": max(0, int(args.num_steps) - rollout_step),
-                                "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
-                                "env_opponent_codes": env_codes,
-                                "env_finished_flags": [bool(x) for x in done_env.tolist()],
-                                "refresh_status": refresh_label,
-                                "elo_current": float(elo_tracker.current_rating),
-                                "elo_games": int(elo_tracker.total_games),
-                                "elo_win_rate": float(elo_tracker.win_rate),
-                                "num_envs": int(args.num_envs),
-                            },
-                        )
-                        if not keep_open:
-                            live_view.close()
-                            live_view = None
+                        now = time.perf_counter()
+                        if now >= next_view_update_at:
+                            refresh_label = refresh_status
+                            if refresh_label.startswith("Last Refresh:"):
+                                refresh_label = f"Last Refresh: {max(0.0, now - last_refresh_wall):.1f}s"
+                            env_codes = [
+                                0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
+                                for tag in env_match_tag
+                            ]
+                            rollout_step = int(step + 1)
+                            keep_open = live_view.update(
+                                env.debug_state_many(),
+                                {
+                                    "global_step": global_step,
+                                    "iteration": iteration,
+                                    "sps": int(global_step / max(1e-9, now - train_start)),
+                                    "rollout_step": rollout_step,
+                                    "rollout_total_steps": int(args.num_steps),
+                                    "steps_to_update": max(0, int(args.num_steps) - rollout_step),
+                                    "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
+                                    "env_opponent_codes": env_codes,
+                                    "env_finished_flags": [bool(x) for x in done_env.tolist()],
+                                    "refresh_status": refresh_label,
+                                    "elo_current": float(elo_tracker.current_rating),
+                                    "elo_games": int(elo_tracker.total_games),
+                                    "elo_win_rate": float(elo_tracker.win_rate),
+                                    "num_envs": int(args.num_envs),
+                                },
+                            )
+                            next_view_update_at = now + (1.0 / max(1, int(args.visualize_fps)))
+                            if not keep_open:
+                                live_view.close()
+                                live_view = None
                     except Exception as exc:
                         live_view_failed = True
                         live_view.close()
@@ -787,34 +792,37 @@ def run_training(args: Args) -> None:
                     barrier_done = np.logical_or(barrier_done, done_env)
                     if live_view is not None and not live_view_failed:
                         try:
-                            env_codes = [
-                                0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
-                                for tag in env_match_tag
-                            ]
-                            keep_open = live_view.update(
-                                env.debug_state_many(),
-                                {
-                                    "global_step": global_step,
-                                    "iteration": iteration,
-                                    "sps": int(global_step / max(1e-9, time.perf_counter() - train_start)),
-                                    "rollout_step": int(args.num_steps),
-                                    "rollout_total_steps": int(args.num_steps),
-                                    "steps_to_update": 0,
-                                    "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
-                                    "env_opponent_codes": env_codes,
-                                    "env_finished_flags": [bool(x) for x in barrier_done.tolist()],
-                                    "refresh_status": (
-                                        f"Barrier: {int(np.count_nonzero(barrier_done))}/{int(args.num_envs)}"
-                                    ),
-                                    "elo_current": float(elo_tracker.current_rating),
-                                    "elo_games": int(elo_tracker.total_games),
-                                    "elo_win_rate": float(elo_tracker.win_rate),
-                                    "num_envs": int(args.num_envs),
-                                },
-                            )
-                            if not keep_open:
-                                live_view.close()
-                                live_view = None
+                            now = time.perf_counter()
+                            if now >= next_view_update_at:
+                                env_codes = [
+                                    0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2
+                                    for tag in env_match_tag
+                                ]
+                                keep_open = live_view.update(
+                                    env.debug_state_many(),
+                                    {
+                                        "global_step": global_step,
+                                        "iteration": iteration,
+                                        "sps": int(global_step / max(1e-9, now - train_start)),
+                                        "rollout_step": int(args.num_steps),
+                                        "rollout_total_steps": int(args.num_steps),
+                                        "steps_to_update": 0,
+                                        "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
+                                        "env_opponent_codes": env_codes,
+                                        "env_finished_flags": [bool(x) for x in barrier_done.tolist()],
+                                        "refresh_status": (
+                                            f"Barrier: {int(np.count_nonzero(barrier_done))}/{int(args.num_envs)}"
+                                        ),
+                                        "elo_current": float(elo_tracker.current_rating),
+                                        "elo_games": int(elo_tracker.total_games),
+                                        "elo_win_rate": float(elo_tracker.win_rate),
+                                        "num_envs": int(args.num_envs),
+                                    },
+                                )
+                                next_view_update_at = now + (1.0 / max(1, int(args.visualize_fps)))
+                                if not keep_open:
+                                    live_view.close()
+                                    live_view = None
                         except Exception as exc:
                             live_view_failed = True
                             if live_view is not None:

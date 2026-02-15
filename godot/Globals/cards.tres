@@ -1,0 +1,152 @@
+[gd_resource type="Resource" script_class="CardsRes" load_steps=30 format=3 uid="uid://odlxbgc3n5f5"]
+
+[ext_resource type="Script" uid="uid://cc8d00ow43nqy" path="res://Globals/card.gd" id="1_4bmaj"]
+[ext_resource type="Script" uid="uid://0p2tn57iv60b" path="res://Globals/cards.gd" id="1_ghn63"]
+[ext_resource type="Texture2D" uid="uid://bowfa33styfu3" path="res://Resources/UI/minipekka.png" id="2_3wmab"]
+[ext_resource type="PackedScene" uid="uid://uvvb6iewwpdm" path="res://Scenes/Troops/minipekka.tscn" id="2_h8db5"]
+[ext_resource type="Texture2D" uid="uid://cqd0ve66mg04i" path="res://Resources/UI/log.png" id="3_ey52q"]
+[ext_resource type="PackedScene" uid="uid://b03km1y7acd26" path="res://Scenes/Troops/log.tscn" id="3_xpg1o"]
+[ext_resource type="Texture2D" uid="uid://c8h3lkgrpuvyy" path="res://Resources/UI/icespirit.png" id="6_5c077"]
+[ext_resource type="PackedScene" uid="uid://d36d276gh0bs5" path="res://Scenes/Troops/icespirit.tscn" id="6_bd2ot"]
+[ext_resource type="Texture2D" uid="uid://uvaeb252equo" path="res://Resources/UI/skeletons.png" id="6_m07o5"]
+[ext_resource type="PackedScene" uid="uid://dmruexs4tfdie" path="res://Scenes/Troops/skeletons.tscn" id="6_rjodd"]
+[ext_resource type="Texture2D" uid="uid://cldxx6lwxdexj" path="res://Resources/UI/hogrider.png" id="10_3diiu"]
+[ext_resource type="PackedScene" uid="uid://obypy0ceb3jg" path="res://Scenes/Troops/hogrider.tscn" id="10_blsd8"]
+[ext_resource type="Texture2D" uid="uid://bxxlh7km30dta" path="res://Resources/UI/icegolem.png" id="12_7ewfc"]
+[ext_resource type="PackedScene" uid="uid://s1wkufo33vji" path="res://Scenes/Troops/icegolem.tscn" id="12_36su0"]
+[ext_resource type="PackedScene" uid="uid://ck55igb0pi0ce" path="res://Scenes/Troops/fireball.tscn" id="14_kjolr"]
+[ext_resource type="Texture2D" uid="uid://hhylkg7ubah6" path="res://Resources/UI/fireball.png" id="15_hwuj0"]
+[ext_resource type="PackedScene" uid="uid://b1kgbpo6ibnyf" path="res://Scenes/Troops/cannon.tscn" id="16_0i8vc"]
+[ext_resource type="Texture2D" uid="uid://da1orxldsl2hw" path="res://Resources/UI/musketeer.png" id="16_hwuj0"]
+[ext_resource type="PackedScene" uid="uid://vtia0rog0v1b" path="res://Scenes/Troops/musketeer.tscn" id="16_mppft"]
+[ext_resource type="Texture2D" uid="uid://bqh8anlb5g5hg" path="res://Resources/UI/cannon.png" id="17_ikdx1"]
+
+[sub_resource type="Resource" id="Resource_ey52q"]
+script = ExtResource("1_4bmaj")
+name = "Icy Blob"
+texture = ExtResource("6_5c077")
+cost = 1
+speed = 0.4
+health = 330
+damage = 159
+attack_swing = 0.1
+attack_range = 2.5
+scene = ExtResource("6_bd2ot")
+metadata/_custom_type_script = "uid://cc8d00ow43nqy"
+
+[sub_resource type="Resource" id="Resource_mppft"]
+script = ExtResource("1_4bmaj")
+name = "Musketeer"
+texture = ExtResource("16_hwuj0")
+cost = 4
+speed = 0.2
+health = 1050
+damage = 315
+attack_swing = 0.8
+attack_end = 0.2
+attack_range = 5.5
+scene = ExtResource("16_mppft")
+metadata/_custom_type_script = "uid://cc8d00ow43nqy"
+
+[sub_resource type="Resource" id="Resource_ikdx1"]
+script = ExtResource("1_4bmaj")
+name = "Cannon"
+type = 1
+texture = ExtResource("17_ikdx1")
+cost = 3
+health = 1200
+damage = 310
+attack_swing = 0.95
+attack_end = 0.05
+attack_range = 5.5
+scene = ExtResource("16_0i8vc")
+metadata/_custom_type_script = "uid://cc8d00ow43nqy"
+
+[sub_resource type="Resource" id="Resource_bd2ot"]
+script = ExtResource("1_4bmaj")
+name = "Capybara Rider"
+texture = ExtResource("10_3diiu")
+cost = 4
+speed = 0.4
+health = 2450
+damage = 460
+attack_swing = 0.6
+attack_end = 1.0
+attack_range = 1.2
+target_type = 3
+scene = ExtResource("10_blsd8")
+metadata/_custom_type_script = "uid://cc8d00ow43nqy"
+
+[sub_resource type="Resource" id="Resource_h8db5"]
+script = ExtResource("1_4bmaj")
+name = "Skeletons"
+texture = ExtResource("6_m07o5")
+cost = 1
+amount = 3
+speed = 0.25
+damage = 120
+attack_swing = 0.5
+attack_end = 0.5
+attack_range = 0.7
+target_type = 0
+scene = ExtResource("6_rjodd")
+metadata/_custom_type_script = "uid://cc8d00ow43nqy"
+
+[sub_resource type="Resource" id="Resource_36su0"]
+script = ExtResource("1_4bmaj")
+name = "Fireball"
+type = 2
+texture = ExtResource("15_hwuj0")
+cost = 4
+damage = 1000
+tower_damage = 300
+attack_range = 2.5
+scene = ExtResource("14_kjolr")
+metadata/_custom_type_script = "uid://cc8d00ow43nqy"
+
+[sub_resource type="Resource" id="Resource_blsd8"]
+script = ExtResource("1_4bmaj")
+name = "Ice Freak"
+texture = ExtResource("12_7ewfc")
+cost = 2
+speed = 0.138
+health = 1740
+damage = 122
+attack_swing = 1.0
+attack_end = 1.5
+target_type = 3
+scene = ExtResource("12_36su0")
+metadata/_custom_type_script = "uid://cc8d00ow43nqy"
+
+[sub_resource type="Resource" id="Resource_xpg1o"]
+script = ExtResource("1_4bmaj")
+name = "Lumber"
+type = 2
+texture = ExtResource("3_ey52q")
+cost = 2
+speed = 0.6
+damage = 380
+tower_damage = 60
+target_type = 0
+scene = ExtResource("3_xpg1o")
+metadata/_custom_type_script = "uid://cc8d00ow43nqy"
+
+[sub_resource type="Resource" id="Resource_4bmaj"]
+script = ExtResource("1_4bmaj")
+name = "Mini Fatty"
+texture = ExtResource("2_3wmab")
+cost = 4
+speed = 0.3
+health = 2000
+damage = 1100
+attack_swing = 0.5
+attack_end = 1.1
+attack_range = 0.8
+target_type = 0
+scene = ExtResource("2_h8db5")
+metadata/_custom_type_script = "uid://cc8d00ow43nqy"
+
+[resource]
+script = ExtResource("1_ghn63")
+cards = Array[ExtResource("1_4bmaj")]([SubResource("Resource_ey52q"), SubResource("Resource_mppft"), SubResource("Resource_ikdx1"), SubResource("Resource_bd2ot"), SubResource("Resource_h8db5"), SubResource("Resource_36su0"), SubResource("Resource_blsd8"), SubResource("Resource_xpg1o"), SubResource("Resource_4bmaj")])
+metadata/_custom_type_script = "uid://0p2tn57iv60b"

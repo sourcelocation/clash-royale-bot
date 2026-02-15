@@ -1,0 +1,9 @@
+torch>=2.2
+numpy>=1.26
+gymnasium>=0.29
+tensorboard>=2.14
+tyro>=0.8
+pybind11>=2.12
+pytest>=8
+pytest-timeout>=2.3
+pygame>=2.5

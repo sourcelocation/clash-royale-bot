@@ -1,0 +1,102 @@
+{
+	"connections": [
+		{
+			"from": "pattern",
+			"from_port": 0,
+			"to": "colorize",
+			"to_port": 0
+		}
+	],
+	"label": "Graph",
+	"longdesc": "",
+	"name": "@Node@723",
+	"node_position": {
+		"x": 0.0,
+		"y": 0.0
+	},
+	"nodes": [
+		{
+			"export_paths": {
+
+			},
+			"name": "Material",
+			"node_position": {
+				"x": 319.0,
+				"y": 95.0
+			},
+			"parameters": {
+				"albedo_color": {
+					"a": 1.0,
+					"b": 1.0,
+					"g": 1.0,
+					"r": 1.0,
+					"type": "Color"
+				},
+				"ao": 1.0,
+				"depth_scale": 0.5,
+				"emission_energy": 1.0,
+				"flags_transparent": true,
+				"metallic": 0.0,
+				"normal": 1.0,
+				"roughness": 1.0,
+				"size": 11,
+				"sss": 1.0
+			},
+			"seed_int": 0,
+			"type": "material"
+		},
+		{
+			"name": "pattern",
+			"node_position": {
+				"x": -260.5,
+				"y": 153.0
+			},
+			"parameters": {
+				"mix": 4,
+				"x_scale": 1.0,
+				"x_wave": 2,
+				"y_scale": 1.0,
+				"y_wave": 2
+			},
+			"seed_int": 0,
+			"type": "pattern"
+		},
+		{
+			"name": "colorize",
+			"node_position": {
+				"x": 58.5,
+				"y": 157.919998168945
+			},
+			"parameters": {
+				"gradient": {
+					"interpolation": 1,
+					"points": [
+						{
+							"a": 1.0,
+							"b": 0.0,
+							"g": 0.572265625,
+							"pos": 0.0,
+							"r": 0.185539245605469
+						},
+						{
+							"a": 1.0,
+							"b": 0.0,
+							"g": 0.640625,
+							"pos": 1.0,
+							"r": 0.16265869140625
+						}
+					],
+					"type": "Gradient"
+				}
+			},
+			"seed_int": 0,
+			"type": "colorize"
+		}
+	],
+	"parameters": {
+
+	},
+	"seed_int": 0,
+	"shortdesc": "",
+	"type": "graph"
+}

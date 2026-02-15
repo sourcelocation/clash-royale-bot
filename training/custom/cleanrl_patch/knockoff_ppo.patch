@@ -1,0 +1,14 @@
+# Knockoff patch notes for CleanRL PPO integration.
+#
+# This repository keeps upstream cleanrl/ppo.py frozen in:
+# training/custom/cleanrl_upstream/ppo.py
+#
+# Canonical runnable file:
+# training/custom/train_ppo.py
+#
+# Customizations applied relative to upstream:
+# 1) Godot Gymnasium worker startup via GodotClashEnv
+# 2) Multi-agent stream selection using team controllers
+# 3) Masked multi-discrete policy integration via training/custom/ppo/model.py
+# 4) Existing CheckpointManager-compatible checkpoint save/load
+# 5) Runtime options for sim speed, tick pacing, and controller ownership

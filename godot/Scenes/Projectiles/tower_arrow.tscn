@@ -1,0 +1,17 @@
+[gd_scene load_steps=4 format=3 uid="uid://d27qb2ea3b74k"]
+
+[ext_resource type="Script" uid="uid://ca45l8huegjyt" path="res://Scenes/Projectiles/projectile.gd" id="1_s3vnx"]
+[ext_resource type="PackedScene" uid="uid://dxl7f6x7up86b" path="res://Scenes/Projectiles/arrow.blend" id="2_nrot5"]
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_nrot5"]
+radius = 0.06
+
+[node name="TowerArrow" type="Area3D"]
+script = ExtResource("1_s3vnx")
+metadata/_custom_type_script = "uid://ca45l8huegjyt"
+
+[node name="arrow" parent="." instance=ExtResource("2_nrot5")]
+transform = Transform3D(0.136233, 0, 0, 0, 0.136233, 0, 0, 0, 0.136233, 0, 0, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("SphereShape3D_nrot5")

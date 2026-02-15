@@ -1,0 +1,88 @@
+[gd_scene load_steps=8 format=3 uid="uid://cr1f3cgpgtkoj"]
+
+[ext_resource type="Script" uid="uid://dn4mrbmg8nbs7" path="res://Scenes/Cards/card_battle.gd" id="1_dyjn2"]
+[ext_resource type="Texture2D" uid="uid://bowfa33styfu3" path="res://Resources/UI/minipekka.png" id="1_hsbvl"]
+[ext_resource type="Texture2D" uid="uid://7o1abit6kmd4" path="res://Resources/Textures/coin.png" id="2_t0bmj"]
+[ext_resource type="FontFile" uid="uid://dy8sqqteva7wf" path="res://Resources/Fonts/Edges.ttf" id="3_t0bmj"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_dyjn2"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vlgnl"]
+corner_radius_top_left = 20
+corner_radius_top_right = 20
+corner_radius_bottom_right = 20
+corner_radius_bottom_left = 20
+
+[sub_resource type="LabelSettings" id="LabelSettings_66173"]
+font = ExtResource("3_t0bmj")
+font_size = 67
+outline_size = 10
+outline_color = Color(0, 0, 0, 1)
+
+[node name="BattleCard" type="Button"]
+custom_minimum_size = Vector2(157.17, 0)
+offset_right = 157.17
+offset_bottom = 209.0
+focus_mode = 0
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxEmpty_dyjn2")
+theme_override_styles/hover = SubResource("StyleBoxEmpty_dyjn2")
+theme_override_styles/pressed = SubResource("StyleBoxEmpty_dyjn2")
+theme_override_styles/normal = SubResource("StyleBoxEmpty_dyjn2")
+script = ExtResource("1_dyjn2")
+
+[node name="Panel" type="Panel" parent="."]
+clip_children = 1
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_vlgnl")
+
+[node name="Preview" type="TextureRect" parent="Panel"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("1_hsbvl")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Coin" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 31.0
+offset_top = 105.0
+offset_right = -25.69
+offset_bottom = 24.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("2_t0bmj")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Cost" type="Label" parent="Coin"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -34.0
+offset_top = -46.0
+offset_right = 34.0
+offset_bottom = 46.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "4"
+label_settings = SubResource("LabelSettings_66173")
+horizontal_alignment = 1
+vertical_alignment = 1

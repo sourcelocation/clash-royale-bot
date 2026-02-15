@@ -1,0 +1,54 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Knockoff-CR"
+run/main_scene="uid://d4envr6a27ars"
+config/features=PackedStringArray("26.1", "Mobile", "Redot")
+config/icon="res://icon.svg"
+
+[autoload]
+
+ArenaConf="*res://Globals/ArenaConf.gd"
+
+[display]
+
+window/size/viewport_width=1440
+window/size/viewport_height=1920
+window/handheld/orientation=1
+
+[dotnet]
+
+project/assembly_name="Knockoff-CR"
+
+[file_customization]
+
+folder_colors={
+"res://Globals/": "purple",
+"res://Resources/": "green",
+"res://Scenes/": "orange",
+"res://Tests/": "gray"
+}
+
+[gui]
+
+theme/custom="uid://c5q2q01lytl5l"
+
+[navigation]
+
+3d/default_cell_size=0.01
+3d/merge_rasterizer_cell_scale=0.01
+
+[rendering]
+
+rendering_device/driver.macos="vulkan"
+renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true

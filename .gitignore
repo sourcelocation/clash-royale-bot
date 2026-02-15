@@ -1,0 +1,28 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+*.blend1
+*.exr
+*.lmbake
+*.blend.unwrap_cache
+*.lmbake.depren
+*.DS_Store
+.vscode/
+logs/
+models/
+*_shadow.png
+
+# Python / training artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+training/logs/
+training/**/checkpoints/
+
+# C++ backend build artifacts
+cpp/build/
+build/
+knockoff_cr_cpp*.so

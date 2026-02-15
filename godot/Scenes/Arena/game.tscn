@@ -1,0 +1,253 @@
+[gd_scene load_steps=18 format=3 uid="uid://tpc7ere14q4g"]
+
+[ext_resource type="PackedScene" uid="uid://bqs442jlgosye" path="res://Scenes/Arena/arena.blend" id="1_80nbo"]
+[ext_resource type="Script" uid="uid://dtddp3m012n0e" path="res://Scenes/Arena/game.gd" id="1_d8475"]
+[ext_resource type="Texture2D" uid="uid://7o1abit6kmd4" path="res://Resources/Textures/coin.png" id="6_66173"]
+[ext_resource type="PackedScene" uid="uid://cr1f3cgpgtkoj" path="res://Scenes/Cards/card_battle.tscn" id="7_74umv"]
+[ext_resource type="Script" uid="uid://esmjtojn28aa" path="res://Scenes/Arena/bottom_panel.gd" id="8_7kxjq"]
+[ext_resource type="Script" uid="uid://nb30m2rklckk" path="res://Scenes/AITypeShit/stupid_ai.gd" id="9_d8475"]
+[ext_resource type="Script" uid="uid://bjjrej81v4ymd" path="res://Scenes/Arena/ai_controller.gd" id="10_7kxjq"]
+[ext_resource type="PackedScene" uid="uid://cyc0lly8rrrnk" path="res://Scenes/Towers/small_tower.tscn" id="11_tcsq8"]
+[ext_resource type="PackedScene" uid="uid://nlmthn30nqew" path="res://Scenes/Towers/king_tower.tscn" id="11_vesu4"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_d8475"]
+bg_color = Color(0.24, 0.24, 0.24, 1)
+border_width_left = 6
+border_width_top = 6
+border_width_right = 6
+border_color = Color(0.460347, 0.460347, 0.460347, 1)
+corner_radius_top_left = 20
+corner_radius_top_right = 20
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7kxjq"]
+bg_color = Color(0.15, 0.129375, 0.0375, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_66173"]
+bg_color = Color(1, 0.7, 0, 1)
+
+[sub_resource type="NavigationMesh" id="NavigationMesh_7kxjq"]
+vertices = PackedVector3Array(-0.75375, 0.42, -0.18614, -0.69375, 0.42, -0.12614, -0.63375, 0.42, -0.12614, -0.57375, 0.42, -0.18614, -1.02375, 0.42, -1.84614, 1.02625, 0.42, -1.84614, 0.57625, 0.42, -0.18614, -0.63375, 0.42, 0.13386, -0.69375, 0.42, 0.13386, 0.63625, 0.42, -0.12614, 0.63625, 0.42, 0.13386, 0.69625, 0.42, 0.13386, 0.69625, 0.42, -0.12614, -0.73375, 0.42, 0.18386, -0.57375, 0.42, 0.19386, 0.57625, 0.42, 0.19386, -1.02375, 0.42, 1.84386, 1.02625, 0.42, 1.84386, -1.02375, 0.42, 0.19386, 0.75625, 0.42, -0.18614, 1.02625, 0.42, -0.18614, -1.02375, 0.42, -0.18614, 1.02625, 0.42, 0.19386, 0.73625, 0.42, 0.18386, -0.49375, -0.58, -0.04614, -0.49375, -0.58, 0.0538599, 0.49625, -0.58, 0.0538599, 0.49625, -0.58, -0.04614)
+polygons = [PackedInt32Array(1, 0, 2), PackedInt32Array(2, 0, 3), PackedInt32Array(3, 0, 4), PackedInt32Array(6, 3, 5), PackedInt32Array(5, 3, 4), PackedInt32Array(8, 1, 7), PackedInt32Array(7, 1, 2), PackedInt32Array(12, 11, 9), PackedInt32Array(9, 11, 10), PackedInt32Array(8, 7, 13), PackedInt32Array(13, 7, 14), PackedInt32Array(15, 17, 14), PackedInt32Array(14, 17, 16), PackedInt32Array(13, 14, 18), PackedInt32Array(18, 14, 16), PackedInt32Array(5, 20, 19), PackedInt32Array(0, 21, 4), PackedInt32Array(23, 22, 17), PackedInt32Array(11, 23, 10), PackedInt32Array(10, 23, 15), PackedInt32Array(15, 23, 17), PackedInt32Array(12, 9, 19), PackedInt32Array(19, 9, 6), PackedInt32Array(19, 6, 5), PackedInt32Array(27, 26, 24), PackedInt32Array(24, 26, 25)]
+sample_partition_type = 2
+geometry_collision_mask = 256
+geometry_source_geometry_mode = 1
+cell_size = 0.01
+cell_height = 0.01
+agent_height = 0.1
+agent_radius = 0.07
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_80nbo"]
+ground_bottom_color = Color(0.106598, 0.469943, 0.999986, 1)
+ground_horizon_color = Color(1, 1, 1, 1)
+ground_curve = 0.121257
+
+[sub_resource type="Sky" id="Sky_e2o6t"]
+sky_material = SubResource("ProceduralSkyMaterial_80nbo")
+
+[sub_resource type="Environment" id="Environment_feb5d"]
+background_mode = 2
+background_color = Color(0.3268, 0.56506, 0.76, 1)
+sky = SubResource("Sky_e2o6t")
+tonemap_white = 5.09
+adjustment_contrast = 1.02
+adjustment_saturation = 8.0
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_tcsq8"]
+size = Vector3(2.155, 0.001, 3.815)
+
+[node name="Game" type="Node3D"]
+script = ExtResource("1_d8475")
+
+[node name="UI" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="BottomPanel" type="Panel" parent="UI"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 405.0
+offset_top = -314.0
+offset_right = -303.0
+offset_bottom = -1.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_d8475")
+script = ExtResource("8_7kxjq")
+
+[node name="Cards" type="HBoxContainer" parent="UI/BottomPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -11.0
+offset_top = 23.0
+offset_right = 5.0
+offset_bottom = -86.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 20
+alignment = 1
+
+[node name="Control" parent="UI/BottomPanel/Cards" instance=ExtResource("7_74umv")]
+layout_mode = 2
+
+[node name="Control2" parent="UI/BottomPanel/Cards" instance=ExtResource("7_74umv")]
+layout_mode = 2
+
+[node name="Control3" parent="UI/BottomPanel/Cards" instance=ExtResource("7_74umv")]
+layout_mode = 2
+
+[node name="Control4" parent="UI/BottomPanel/Cards" instance=ExtResource("7_74umv")]
+layout_mode = 2
+
+[node name="ProgressBar" type="ProgressBar" parent="UI/BottomPanel"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 48.0
+offset_top = -61.0
+offset_right = -27.0
+offset_bottom = -14.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_styles/background = SubResource("StyleBoxFlat_7kxjq")
+theme_override_styles/fill = SubResource("StyleBoxFlat_66173")
+max_value = 10.0
+value = 3.12
+show_percentage = false
+
+[node name="TextureRect" type="TextureRect" parent="UI/BottomPanel"]
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 15.0
+offset_top = -70.0
+offset_right = 81.0
+offset_bottom = -6.0
+grow_vertical = 0
+texture = ExtResource("6_66173")
+expand_mode = 1
+stretch_mode = 4
+
+[node name="TextureButton" type="TextureButton" parent="UI"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -447.0
+offset_top = -314.0
+offset_right = -407.0
+offset_bottom = -274.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="SwitchTeamButton" type="Button" parent="UI"]
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -137.0
+offset_top = -55.0
+grow_horizontal = 0
+grow_vertical = 0
+focus_mode = 0
+toggle_mode = true
+text = "TEAM"
+
+[node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
+navigation_mesh = SubResource("NavigationMesh_7kxjq")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_feb5d")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.364324, 0.931272, 0, -0.931272, 0.364324, 0, 2.718, 1.209)
+projection = 1
+fov = 34.0
+size = 4.592
+far = 83.46
+
+[node name="arena" parent="." instance=ExtResource("1_80nbo")]
+
+[node name="ReflectionProbe" type="ReflectionProbe" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.686401, 0)
+visible = false
+size = Vector3(6.83887, 3.6272, 9.08423)
+origin_offset = Vector3(0, 0, 0.72)
+
+[node name="ArenaStaticBody" type="StaticBody3D" parent="."]
+collision_layer = 129
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="ArenaStaticBody"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.394355, 0)
+shape = SubResource("BoxShape3D_tcsq8")
+
+[node name="CSGCombiner3D" type="CSGCombiner3D" parent="." groups=["navigation_mesh_source_group"]]
+visible = false
+use_collision = true
+collision_layer = 256
+collision_mask = 0
+
+[node name="CSGBox3D" type="CSGBox3D" parent="CSGCombiner3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+size = Vector3(2.1875, 1, 3.83228)
+
+[node name="CSGBox3D3" type="CSGBox3D" parent="CSGCombiner3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.0745483, 0)
+operation = 2
+size = Vector3(1.13477, 1.0509, 0.251953)
+
+[node name="CSGBox3D4" type="CSGBox3D" parent="CSGCombiner3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.33416, -0.0745483, 0)
+operation = 2
+size = Vector3(1.154, 1.051, 0.252)
+
+[node name="CSGBox3D5" type="CSGBox3D" parent="CSGCombiner3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.334, -0.075, 0)
+operation = 2
+size = Vector3(1.154, 1.051, 0.252)
+
+[node name="AI1" type="Node3D" parent="."]
+script = ExtResource("10_7kxjq")
+reset_after = 3000
+
+[node name="Towers" type="Node3D" parent="."]
+
+[node name="KingTower" parent="Towers" instance=ExtResource("11_vesu4")]
+transform = Transform3D(-0.999994, 0, 0.00333371, 0, 1, 0, -0.00333371, 0, -0.999994, 0.00604401, 0.606924, -1.53604)
+team = 1
+
+[node name="SmallTower" parent="Towers" instance=ExtResource("11_tcsq8")]
+transform = Transform3D(-1, 0, 1.50996e-07, 0, 1, 0, -1.50996e-07, 0, -1, -0.659749, 0.560947, -1.1291)
+team = 1
+
+[node name="SmallTower2" parent="Towers" instance=ExtResource("11_tcsq8")]
+transform = Transform3D(-1, 0, 1.50996e-07, 0, 1, 0, -1.50996e-07, 0, -1, 0.664469, 0.560947, -1.1291)
+team = 1
+
+[node name="KingTower2" parent="Towers" instance=ExtResource("11_vesu4")]
+transform = Transform3D(0.999994, 0, -0.0033338, 0, 1, 0, 0.0033338, 0, 0.999994, 0.00113169, 0.606924, 1.55087)
+
+[node name="SmallTower3" parent="Towers" instance=ExtResource("11_tcsq8")]
+transform = Transform3D(1, 0, -2.38419e-07, 0, 1, 0, 2.38419e-07, 0, 1, 0.666925, 0.560947, 1.14393)
+
+[node name="SmallTower4" parent="Towers" instance=ExtResource("11_tcsq8")]
+transform = Transform3D(1, 0, -2.38419e-07, 0, 1, 0, 2.38419e-07, 0, 1, -0.657293, 0.560947, 1.14393)
+
+[node name="StupidAI" type="Node3D" parent="."]
+script = ExtResource("9_d8475")

@@ -1,0 +1,20 @@
+[gd_scene load_steps=2 format=3 uid="uid://d4envr6a27ars"]
+
+[ext_resource type="Script" uid="uid://bpalpyn8r7tst" path="res://Scenes/AITypeShit/train.gd" id="1_24b0v"]
+
+[node name="Train" type="Node3D"]
+script = ExtResource("1_24b0v")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.836028, 0.546671, -0.0469912, 0, 0.0856429, 0.996326, 0.548687, 0.832956, -0.0715998, 0.952219, 1.77686, 0.361688)
+light_energy = 1.178
+light_indirect_energy = 1.851
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.364324, 0.931272, 0, -0.931272, 0.364324, 0, 9.433, 3.67)
+projection = 1
+current = true
+fov = 34.0
+size = 3.965
+far = 83.46

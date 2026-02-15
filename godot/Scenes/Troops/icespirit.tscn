@@ -1,0 +1,73 @@
+[gd_scene load_steps=9 format=3 uid="uid://d36d276gh0bs5"]
+
+[ext_resource type="Script" uid="uid://bj0uew40wplov" path="res://Scenes/Troops/icespirit.gd" id="1_q33oq"]
+[ext_resource type="StyleBox" uid="uid://cvfn6geshcga5" path="res://Scenes/Troops/health-fill-red.tres" id="2_uoi7t"]
+[ext_resource type="PackedScene" uid="uid://b6dlduacwwrkm" path="res://Scenes/Troops/icespirit.blend" id="3_q33oq"]
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_q33oq"]
+height = 0.201172
+radius = 0.03
+
+[sub_resource type="Animation" id="Animation_yodlp"]
+resource_name = "DamageHit"
+length = 0.07
+
+[sub_resource type="Animation" id="Animation_vm46p"]
+length = 0.001
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_ckl6x"]
+_data = {
+&"DamageHit": SubResource("Animation_yodlp"),
+&"RESET": SubResource("Animation_vm46p")
+}
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_yodlp"]
+height = 0.258789
+radius = 0.001
+
+[node name="IceSpirit" type="Area3D" node_paths=PackedStringArray("visual")]
+script = ExtResource("1_q33oq")
+visual = NodePath("icespirit")
+
+[node name="UI" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 0
+
+[node name="HealthBar" type="ProgressBar" parent="UI"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -33.0
+offset_top = -5.0
+offset_right = 34.0
+offset_bottom = 5.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/fill = ExtResource("2_uoi7t")
+value = 84.41
+show_percentage = false
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("CylinderShape3D_q33oq")
+
+[node name="NavigationAgent3D" type="NavigationAgent3D" parent="."]
+path_desired_distance = 0.1
+target_desired_distance = 0.1
+path_height_offset = -0.13
+path_max_distance = 0.01
+
+[node name="AnimationPlayer" type="AnimationPlayer" parent="."]
+libraries = {
+&"": SubResource("AnimationLibrary_ckl6x")
+}
+
+[node name="RangeArea" type="Area3D" parent="."]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="RangeArea"]
+shape = SubResource("CylinderShape3D_yodlp")
+
+[node name="icespirit" parent="." instance=ExtResource("3_q33oq")]
+transform = Transform3D(0.0617167, 0, 0, 0, 0.0617167, 0, 0, 0, 0.0617167, 0, 0, 0)

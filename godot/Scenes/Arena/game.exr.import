@@ -1,0 +1,28 @@
+[remap]
+
+importer="2d_array_texture"
+type="CompressedTexture2DArray"
+uid="uid://q2081y3b5tx8"
+path.bptc="res://.godot/imported/game.exr-9e9b6557048dd7bc8811745a25be18bd.bptc.ctexarray"
+path.astc="res://.godot/imported/game.exr-9e9b6557048dd7bc8811745a25be18bd.astc.ctexarray"
+metadata={
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
+}
+
+[deps]
+
+source_file="res://Scenes/Arena/game.exr"
+dest_files=["res://.godot/imported/game.exr-9e9b6557048dd7bc8811745a25be18bd.bptc.ctexarray", "res://.godot/imported/game.exr-9e9b6557048dd7bc8811745a25be18bd.astc.ctexarray"]
+
+[params]
+
+compress/mode=2
+compress/high_quality=false
+compress/lossy_quality=0.7
+compress/hdr_compression=1
+compress/channel_pack=1
+mipmaps/generate=false
+mipmaps/limit=-1
+slices/horizontal=1
+slices/vertical=1

@@ -1,0 +1,152 @@
+[gd_scene load_steps=13 format=3 uid="uid://nlmthn30nqew"]
+
+[ext_resource type="Script" uid="uid://cklmc74flp370" path="res://Scenes/Troops/tower.gd" id="1_182bs"]
+[ext_resource type="PackedScene" uid="uid://bmjnimcko71fh" path="res://Scenes/Towers/king_tower.blend" id="2_182bs"]
+[ext_resource type="Material" uid="uid://c4s7ntt2x5o6k" path="res://Scenes/Troops/damage_hit.tres" id="3_182bs"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_vesu4"]
+size = Vector3(0.31665, 0.403442, 0.302734)
+
+[sub_resource type="LabelSettings" id="LabelSettings_xru8n"]
+font_size = 32
+font_color = Color(0.72, 0.846, 1, 1)
+outline_size = 4
+outline_color = Color(0.13, 0.136167, 0.5, 1)
+
+[sub_resource type="Animation" id="Animation_gsa8u"]
+resource_name = "DamageHit"
+length = 0.07
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("king_tower/Cube:material_overlay:albedo_color")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.0666667),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [Color(1, 0, 0, 0.407843), Color(1, 0, 0, 0)]
+}
+
+[sub_resource type="Animation" id="Animation_ilvc7"]
+length = 0.001
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("king_tower/Cube:material_overlay:albedo_color")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0),
+"transitions": PackedFloat32Array(1),
+"update": 0,
+"values": [Color(1, 0, 0, 0)]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_ilvc7"]
+_data = {
+&"DamageHit": SubResource("Animation_gsa8u"),
+&"RESET": SubResource("Animation_ilvc7")
+}
+
+[sub_resource type="Curve" id="Curve_182bs"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_wdrgb"]
+curve = SubResource("Curve_182bs")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_t1vwj"]
+particle_flag_align_y = true
+emission_shape_scale = Vector3(0.3, 1, 0.3)
+emission_shape = 3
+emission_box_extents = Vector3(1, 1, 1)
+direction = Vector3(0, 0, 0)
+spread = 180.0
+initial_velocity_min = 15.6
+initial_velocity_max = 16.7
+gravity = Vector3(0, -13, 0)
+scale_min = 0.2
+scale_max = 0.5
+scale_curve = SubResource("CurveTexture_wdrgb")
+hue_variation_min = -0.08
+hue_variation_max = 0.08
+collision_mode = 1
+collision_friction = 0.0
+collision_bounce = 0.0
+collision_use_scale = true
+
+[sub_resource type="PrismMesh" id="PrismMesh_awhtv"]
+left_to_right = 0.3
+
+[node name="KingTower" type="Area3D" node_paths=PackedStringArray("visual") groups=["towers"]]
+transform = Transform3D(-0.999994, 0, 0.00333366, 0, 1, 0, -0.00333366, 0, -0.999994, 0, 0, 0)
+monitoring = false
+script = ExtResource("1_182bs")
+manual_health = 7030
+activated = false
+visual = NodePath("king_tower")
+
+[node name="king_tower" parent="." instance=ExtResource("2_182bs")]
+
+[node name="Cube" parent="king_tower" index="0"]
+material_overlay = ExtResource("3_182bs")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.00640869, 0)
+shape = SubResource("BoxShape3D_vesu4")
+
+[node name="UI" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 0
+
+[node name="HealthBar" type="ProgressBar" parent="UI"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -54.0
+offset_top = -12.0
+offset_right = 55.0
+offset_bottom = 12.0
+grow_horizontal = 2
+grow_vertical = 2
+value = 62.0
+show_percentage = false
+
+[node name="Health" type="Label" parent="UI"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -20.0
+offset_top = -15.0
+offset_right = 20.0
+grow_horizontal = 2
+grow_vertical = 0
+text = "4424"
+label_settings = SubResource("LabelSettings_xru8n")
+
+[node name="AnimationPlayer" type="AnimationPlayer" parent="."]
+libraries = {
+&"": SubResource("AnimationLibrary_ilvc7")
+}
+
+[node name="Particles" type="Node3D" parent="."]
+
+[node name="GPUParticles3D2" type="GPUParticles3D" parent="Particles"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0203295, 0)
+emitting = false
+amount = 20
+one_shot = true
+explosiveness = 0.98
+fixed_fps = 60
+process_material = SubResource("ParticleProcessMaterial_t1vwj")
+draw_pass_1 = SubResource("PrismMesh_awhtv")
+
+[editable path="king_tower"]

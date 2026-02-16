@@ -205,11 +205,8 @@ py::dict ClashEnvBatch::step_many_packed(py::array_t<int, py::array::c_style | p
 
     const int obs_dim = static_cast<int>(envs_.front().obs_vectors()[0].size());
     const int mask_dim = static_cast<int>(envs_.front().action_masks()[0].size());
-    const int cards = kUsableCardCount;
-    const int positions = kGridW * kGridH;
     py::array_t<float> obs({env_count, kAgentCount, obs_dim});
     py::array_t<float> action_mask({env_count, kAgentCount, mask_dim});
-    py::array_t<float> card_position_masks({env_count, kAgentCount, cards, positions});
     py::array_t<float> reward({env_count, kAgentCount});
     py::array_t<uint8_t> done({env_count});
     py::array_t<uint8_t> truncation({env_count});
@@ -217,7 +214,6 @@ py::dict ClashEnvBatch::step_many_packed(py::array_t<int, py::array::c_style | p
 
     auto obs_view = obs.mutable_unchecked<3>();
     auto mask_view = action_mask.mutable_unchecked<3>();
-    auto card_view = card_position_masks.mutable_unchecked<4>();
     auto reward_view = reward.mutable_unchecked<2>();
     auto done_view = done.mutable_unchecked<1>();
     auto trunc_view = truncation.mutable_unchecked<1>();
@@ -227,7 +223,6 @@ py::dict ClashEnvBatch::step_many_packed(py::array_t<int, py::array::c_style | p
         auto& env = envs_[static_cast<size_t>(env_idx)];
         const auto obs_by_team = env.obs_vectors();
         const auto mask_by_team = env.action_masks();
-        const auto cards_by_team = env.card_position_masks();
         const auto rewards = env.rewards_snapshot();
         for (int team = 0; team < kAgentCount; ++team) {
             for (int j = 0; j < obs_dim; ++j) {
@@ -235,13 +230,6 @@ py::dict ClashEnvBatch::step_many_packed(py::array_t<int, py::array::c_style | p
             }
             for (int j = 0; j < mask_dim; ++j) {
                 mask_view(env_idx, team, j) = static_cast<float>(mask_by_team[static_cast<size_t>(team)][static_cast<size_t>(j)]);
-            }
-            for (int c = 0; c < cards; ++c) {
-                for (int p = 0; p < positions; ++p) {
-                    card_view(env_idx, team, c, p) = static_cast<float>(
-                        cards_by_team[static_cast<size_t>(team)][static_cast<size_t>(c)][static_cast<size_t>(p)]
-                    );
-                }
             }
             reward_view(env_idx, team) = static_cast<float>(rewards[static_cast<size_t>(team)]);
         }
@@ -254,7 +242,6 @@ py::dict ClashEnvBatch::step_many_packed(py::array_t<int, py::array::c_style | p
     py::dict out;
     out["obs"] = obs;
     out["action_mask"] = action_mask;
-    out["card_position_masks"] = card_position_masks;
     out["reward"] = reward;
     out["done"] = done;
     out["truncation"] = truncation;

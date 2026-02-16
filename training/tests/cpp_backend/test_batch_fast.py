@@ -167,7 +167,6 @@ def test_batch_step_many_packed_equivalence(batch_env_factory):
             payload = env_packed.step_many_packed(packed_actions)
             obs = np.asarray(payload["obs"], dtype=np.float32)
             action_mask = np.asarray(payload["action_mask"], dtype=np.float32)
-            card_masks = np.asarray(payload["card_position_masks"], dtype=np.float32)
             reward = np.asarray(payload["reward"], dtype=np.float32)
             done = np.asarray(payload["done"], dtype=np.uint8).astype(np.bool_, copy=False)
             trunc = np.asarray(payload["truncation"], dtype=np.uint8).astype(np.bool_, copy=False)
@@ -179,11 +178,9 @@ def test_batch_step_many_packed_equivalence(batch_env_factory):
                         "obs": [
                             {
                                 "vector": obs[env_i, 0].tolist(),
-                                "position_masks_for_all_cards": card_masks[env_i, 0].tolist(),
                             },
                             {
                                 "vector": obs[env_i, 1].tolist(),
-                                "position_masks_for_all_cards": card_masks[env_i, 1].tolist(),
                             },
                         ],
                         "action_mask": [action_mask[env_i, 0].tolist(), action_mask[env_i, 1].tolist()],

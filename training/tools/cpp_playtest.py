@@ -35,6 +35,26 @@ OBS_CARD_ONEHOT_SIZE = 8
 OBS_HAND_SLOT_STRIDE = OBS_CARD_ONEHOT_SIZE * 2
 
 
+def _build_static_card_position_templates(*, grid_w: int, grid_h: int, cards_count: int) -> np.ndarray:
+    half_h = grid_h // 2
+    river_top = max(0, half_h - 1)
+    river_bottom = min(grid_h - 1, half_h)
+    out = np.zeros((2, cards_count, grid_w * grid_h), dtype=np.float32)
+    for team in (0, 1):
+        side = np.zeros((grid_w * grid_h,), dtype=np.float32)
+        for y in range(grid_h):
+            if y >= half_h:
+                continue
+            internal_y = y if team == 0 else (grid_h - 1 - y)
+            if internal_y == river_top or internal_y == river_bottom:
+                continue
+            row_base = y * grid_w
+            side[row_base : row_base + grid_w] = 1.0
+        for card_id in range(cards_count):
+            out[team, card_id] = side
+    return out
+
+
 @dataclass(frozen=True)
 class CheckpointEntry:
     path: Path
@@ -208,6 +228,13 @@ class PlaytestApp:
         self.region_rows = int(placement.config.region_rows)
         self.region_cell_count = int(placement.config.region_cell_count)
         self.position_count = int(placement.position_count)
+        self.card_count = int(self.branch_sizes[self.action_index["card_selection"]])
+        self.card_mask_off = int(self.mask_offsets["card_selection"][0])
+        self.static_card_templates = _build_static_card_position_templates(
+            grid_w=self.grid_w,
+            grid_h=self.grid_h,
+            cards_count=self.card_count,
+        )
 
         self.checkpoints = _scan_checkpoints(Path(args.run_dir))
         if not self.checkpoints:
@@ -216,10 +243,15 @@ class PlaytestApp:
         self.renderer = ArenaRenderer(title="CR PPO Playtest", width=1280, height=760, headless=False)
         self.current_obs = np.zeros((2, int(self.spec["obs_schema"]["vector_size"])), dtype=np.float32)
         self.current_mask = np.zeros((2, int(self.spec["action_mask_size"])), dtype=np.float32)
-        self.current_card_masks = np.zeros((2, 8, self.position_count), dtype=np.float32)
+        self.current_card_masks = np.zeros((2, self.card_count, self.position_count), dtype=np.float32)
         self.debug_state: dict[str, Any] = {"entities": [], "elixir": [0.0, 0.0], "sim_time_s": 0.0}
         self.loaded_bot: LoadedBot | None = None
         self.policy_cfg = self._build_policy_config(sample_obs_dim=int(self.current_obs.shape[1]))
+
+    def _refresh_card_masks(self) -> None:
+        card_slice = self.current_mask[:, self.card_mask_off : self.card_mask_off + self.card_count]
+        playable = (card_slice > 0.5).astype(np.float32)
+        self.current_card_masks = self.static_card_templates * playable[:, :, None]
 
     def _build_mask_offsets(self) -> dict[str, tuple[int, int]]:
         out: dict[str, tuple[int, int]] = {}
@@ -259,7 +291,7 @@ class PlaytestApp:
             key = f"agent_{team}"
             self.current_obs[team] = np.asarray(entry[key]["vector"], dtype=np.float32)
             self.current_mask[team] = np.asarray(entry[key]["action_mask"], dtype=np.float32)
-            self.current_card_masks[team] = np.asarray(entry[key]["position_masks_for_all_cards"], dtype=np.float32)
+        self._refresh_card_masks()
         self.debug_state = self.env.debug_state_many()[0]
         self.pending_action = None
         self.result_text = ""
@@ -394,10 +426,10 @@ class PlaytestApp:
             actions_per_env[:] = self.wait_action
             actions_per_env[0, self.human_team] = human_action
             actions_per_env[0, self.bot_team] = bot_action
-            obs, mask, card, _reward, done, trunc, winner, _rt = self.env.step_many_packed(actions_per_env)
+            obs, mask, _card, _reward, done, trunc, winner, _rt = self.env.step_many_packed(actions_per_env)
             self.current_obs = obs[0]
             self.current_mask = mask[0]
-            self.current_card_masks = card[0]
+            self._refresh_card_masks()
             self.sim_tick += 1
             self.debug_state = self.env.debug_state_many()[0]
             ended = bool(done[0] or trunc[0])

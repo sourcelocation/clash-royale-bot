@@ -16,7 +16,7 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
 from .cpp_env import CppClashEnvBatch
-from .env_layout import as_card_position_masks, parse_placement_runtime
+from .env_layout import parse_placement_runtime
 from .knockoff_ppo_support import resolve_torch_device
 from .masked_policy_adapter import MaskedPPOAgent, MaskedPolicyConfig
 from .minimal_ppo_args import Args
@@ -62,6 +62,37 @@ def _sim_speed_label(mode: str, tick_hz: int) -> str:
     if mode == "1x":
         return f"{mode}"
     return mode
+
+
+def _build_static_card_position_templates(
+    *,
+    agent_count: int,
+    cards_count: int,
+    grid_width: int,
+    grid_height: int,
+) -> np.ndarray:
+    if agent_count <= 0 or cards_count <= 0 or grid_width <= 0 or grid_height <= 0:
+        raise ValueError(
+            f"Invalid static card template dims agents={agent_count} cards={cards_count} "
+            f"grid={grid_width}x{grid_height}"
+        )
+    half_h = grid_height // 2
+    river_top = max(0, half_h - 1)
+    river_bottom = min(grid_height - 1, half_h)
+    out = np.zeros((agent_count, cards_count, grid_width * grid_height), dtype=np.float32)
+    for team in range(agent_count):
+        side = np.zeros((grid_width * grid_height,), dtype=np.float32)
+        for y in range(grid_height):
+            if y >= half_h:
+                continue
+            internal_y = y if team == 0 else (grid_height - 1 - y)
+            if internal_y == river_top or internal_y == river_bottom:
+                continue
+            row_base = y * grid_width
+            side[row_base : row_base + grid_width] = 1.0
+        for card_id in range(cards_count):
+            out[team, card_id] = side
+    return out
 
 
 def _format_compact_number(value: int | float, *, decimals: int = 2) -> str:
@@ -567,11 +598,13 @@ def run_training(args: Args) -> None:
         obs_dim = int(len(sample[sample_agent]["vector"]))
         mask_dim = int(len(sample[sample_agent]["action_mask"]))
         placement_runtime = parse_placement_runtime(env.spec_data)
-        cards_count, position_count = as_card_position_masks(
-            sample[sample_agent],
-            expected_position_count=placement_runtime.position_count,
-        ).shape
         branch_sizes = branch_sizes_from_action_space(env.action_space[sample_agent].spaces, action_order)
+        card_branch_idx = action_order.index("card_selection")
+        card_branch_offset = int(sum(branch_sizes[:card_branch_idx]))
+        cards_count = int(branch_sizes[card_branch_idx])
+        position_count = int(placement_runtime.position_count)
+        if cards_count <= 0 or position_count <= 0:
+            raise RuntimeError(f"Invalid card mask dims cards={cards_count} positions={position_count}")
         num_branches = len(branch_sizes)
 
         policy_cfg = MaskedPolicyConfig(
@@ -589,17 +622,19 @@ def run_training(args: Args) -> None:
 
         current_obs = np.zeros((args.num_envs, agent_count, obs_dim), dtype=np.float32)
         current_mask = np.zeros((args.num_envs, agent_count, mask_dim), dtype=np.float32)
-        current_card = np.zeros((args.num_envs, agent_count, cards_count, position_count), dtype=np.float32)
+        static_card_templates = _build_static_card_position_templates(
+            agent_count=agent_count,
+            cards_count=cards_count,
+            grid_width=int(placement_runtime.config.grid_width),
+            grid_height=int(placement_runtime.config.grid_height),
+        )
+        static_card_templates_t = torch.as_tensor(static_card_templates, dtype=torch.float32, device=device)
 
         def write_reset(env_idx: int, obs_entry: dict) -> None:
             for team_idx in range(agent_count):
                 key = f"agent_{team_idx}"
                 current_obs[env_idx, team_idx] = np.asarray(obs_entry[key]["vector"], dtype=np.float32)
                 current_mask[env_idx, team_idx] = np.asarray(obs_entry[key]["action_mask"], dtype=np.float32)
-                current_card[env_idx, team_idx] = as_card_position_masks(
-                    obs_entry[key],
-                    expected_position_count=placement_runtime.position_count,
-                )
 
         for env_idx in range(args.num_envs):
             obs_entry = reset_obs[env_idx]
@@ -609,6 +644,7 @@ def run_training(args: Args) -> None:
 
         stream_env = np.repeat(np.arange(args.num_envs, dtype=np.int64), agent_count)
         stream_team = np.tile(np.arange(agent_count, dtype=np.int64), args.num_envs)
+        stream_team_t = torch.as_tensor(stream_team, dtype=torch.long, device=device)
         stream_count = int(stream_env.shape[0])
         batch_size = int(stream_count * args.num_steps)
         minibatch_size = max(1, batch_size // int(args.num_minibatches))
@@ -705,10 +741,17 @@ def run_training(args: Args) -> None:
         train_mask = torch.zeros((args.num_steps, stream_count), dtype=torch.float32, device=device)
 
         def stream_tensors() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            stream_obs = torch.as_tensor(current_obs[stream_env, stream_team], dtype=torch.float32, device=device)
+            stream_mask = torch.as_tensor(current_mask[stream_env, stream_team], dtype=torch.float32, device=device)
+            per_stream_templates = static_card_templates_t.index_select(0, stream_team_t)
+            card_playable = (
+                stream_mask[:, card_branch_offset : card_branch_offset + cards_count] > 0.5
+            ).to(dtype=torch.float32)
+            stream_card = per_stream_templates * card_playable.unsqueeze(-1)
             return (
-                torch.as_tensor(current_obs[stream_env, stream_team], dtype=torch.float32, device=device),
-                torch.as_tensor(current_mask[stream_env, stream_team], dtype=torch.float32, device=device),
-                torch.as_tensor(current_card[stream_env, stream_team], dtype=torch.float32, device=device),
+                stream_obs,
+                stream_mask,
+                stream_card,
             )
 
         next_obs, next_mask, next_card = stream_tensors()
@@ -925,7 +968,7 @@ def run_training(args: Args) -> None:
                     refresh_status_text=refresh_status,
                 )
 
-                packed_obs, packed_mask, packed_card, packed_reward, packed_done, packed_trunc, packed_winner, _rt = (
+                packed_obs, packed_mask, _packed_card, packed_reward, packed_done, packed_trunc, packed_winner, _rt = (
                     env.step_many_packed(actions_per_env)
                 )
                 env_batch_steps += 1
@@ -933,7 +976,6 @@ def run_training(args: Args) -> None:
                 sim_tick_count += 1
                 current_obs = packed_obs
                 current_mask = packed_mask
-                current_card = packed_card
 
                 done_env = np.logical_or(packed_done, packed_trunc)
                 last_done_env = done_env

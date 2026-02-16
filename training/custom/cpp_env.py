@@ -81,7 +81,7 @@ class CppClashEnvBatch:
     def step_many_packed(
         self,
         actions_per_env: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
         arr = np.asarray(actions_per_env, dtype=np.int32)
         expected_shape = (self.num_envs, self.agent_count, len(self.action_order))
         if arr.shape != expected_shape:
@@ -95,7 +95,7 @@ class CppClashEnvBatch:
 
         obs = np.asarray(payload.get("obs"), dtype=np.float32)
         action_mask = np.asarray(payload.get("action_mask"), dtype=np.float32)
-        card_position_masks = np.asarray(payload.get("card_position_masks"), dtype=np.float32)
+        card_position_masks = None
         reward = np.asarray(payload.get("reward"), dtype=np.float32)
         done = np.asarray(payload.get("done"), dtype=np.uint8).astype(np.bool_, copy=False)
         truncation = np.asarray(payload.get("truncation"), dtype=np.uint8).astype(np.bool_, copy=False)
@@ -186,7 +186,7 @@ class CppClashEnvBatch:
         *,
         obs: np.ndarray,
         action_mask: np.ndarray,
-        card_position_masks: np.ndarray,
+        card_position_masks: np.ndarray | None,
         reward: np.ndarray,
         done: np.ndarray,
         truncation: np.ndarray,
@@ -209,7 +209,7 @@ class CppClashEnvBatch:
             raise ValueError(
                 f"packed action_mask shape mismatch expected={expected_action_mask} got={action_mask.shape}"
             )
-        if card_position_masks.shape != expected_card_masks:
+        if card_position_masks is not None and card_position_masks.shape != expected_card_masks:
             raise ValueError(
                 f"packed card_position_masks shape mismatch expected={expected_card_masks} got={card_position_masks.shape}"
             )

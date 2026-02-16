@@ -372,10 +372,14 @@ class ArenaRenderer:
         hidden_cells = max(0, len(cells) - max_cells)
         shown_cells = cells[:max_cells]
         dim_mask = [bool(x) for x in list(grid.get("dim_mask", []))]
-        cols = max(1, int(grid.get("cols", 1)))
-        rows = (len(shown_cells) + cols - 1) // cols
         cell_size = max(8, int(grid.get("cell_size", 12)))
         gap = max(2, int(grid.get("gap", 2)))
+        requested_cols = max(1, int(grid.get("cols", 1)))
+        max_cols_by_count = max(1, len(shown_cells))
+        inner_w = max(1, hw - 20)
+        max_cols_by_width = max(1, (inner_w + gap) // (cell_size + gap))
+        cols = max(1, min(requested_cols, max_cols_by_count, max_cols_by_width))
+        rows = (len(shown_cells) + cols - 1) // cols
         title = str(grid.get("title", ""))
         legend = list(grid.get("legend", []))
         palette = dict(grid.get("palette", {}))

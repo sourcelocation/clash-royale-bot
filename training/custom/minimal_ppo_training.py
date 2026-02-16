@@ -58,9 +58,9 @@ def _tick_delay_seconds_for_mode(mode: str, tick_hz: int) -> float:
 def _sim_speed_label(mode: str, tick_hz: int) -> str:
     hz = max(1, int(tick_hz))
     if mode == "max":
-        return f"{mode} (delay 0.000s/tick)"
+        return f"{mode}"
     if mode == "1x":
-        return f"{mode} (delay {1.0 / float(hz):.3f}s/tick)"
+        return f"{mode}"
     return mode
 
 
@@ -103,32 +103,56 @@ class _TrainingVisualizer:
             self.collapsed = not self.collapsed
         if events.get("speed_cycle", False):
             self._speed_cycle_requested = True
-        if states:
-            if events["left"]:
-                self.env_index = (self.env_index - 1) % len(states)
-            if events["right"]:
-                self.env_index = (self.env_index + 1) % len(states)
-            self.env_index = max(0, min(self.env_index, len(states) - 1))
-            state = states[self.env_index]
-        else:
-            state = {"entities": [], "elixir": [0.0, 0.0]}
-
-        elixir = state.get("elixir", [0.0, 0.0])
-        entities = state.get("entities", [])
+        state = self._select_state(states=states, events=events)
         env_codes = [int(x) for x in metrics.get("env_opponent_codes", [])]
-        env_count = max(1, int(metrics.get("num_envs", max(1, len(env_codes)))))
+        env_count = max(1, len(env_codes))
         grid_cols = max(1, int(math.ceil(math.sqrt(env_count))))
-        decision_steps_to_update = int(metrics.get("decision_steps_to_update", metrics.get("steps_to_update", 0)))
-        decision_rollout_step = int(metrics.get("decision_rollout_step", metrics.get("rollout_step", 0)))
-        decision_rollout_total_steps = max(
-            1, int(metrics.get("decision_rollout_total_steps", metrics.get("rollout_total_steps", 1)))
+        env_finished_flags = [bool(x) for x in metrics.get("env_finished_flags", [])]
+        recent_steps = [int(x) for x in metrics.get("active_recent_steps", [])]
+        anchor_steps = [int(x) for x in metrics.get("active_anchor_steps", [])]
+
+        lines = self._build_lines(state=state, metrics=metrics)
+        self.renderer.draw(
+            self._draw_state_for_mode(state),
+            lines,
+            fps_limit=self.fps,
+            hud_grid=self._build_hud_grid(
+                env_codes=env_codes,
+                grid_cols=grid_cols,
+                env_finished_flags=env_finished_flags,
+                recent_steps=recent_steps,
+                anchor_steps=anchor_steps,
+            ),
         )
+        return True
+
+    def _select_state(self, *, states: list[dict[str, Any]], events: dict[str, Any]) -> dict[str, Any]:
+        if not states:
+            return self._empty_state()
+        if events["left"]:
+            self.env_index = (self.env_index - 1) % len(states)
+        if events["right"]:
+            self.env_index = (self.env_index + 1) % len(states)
+        self.env_index = max(0, min(self.env_index, len(states) - 1))
+        return states[self.env_index]
+
+    def _empty_state(self) -> dict[str, Any]:
+        return {"entities": [], "elixir": [0.0, 0.0]}
+
+    def _draw_state_for_mode(self, state: dict[str, Any]) -> dict[str, Any]:
+        if self.collapsed:
+            return self._empty_state()
+        return state
+
+    def _build_lines(self, *, state: dict[str, Any], metrics: dict[str, Any]) -> list[str]:
+        decision_steps_to_update = int(metrics.get("decision_steps_to_update", 0))
+        decision_rollout_step = int(metrics.get("decision_rollout_step", 0))
+        decision_rollout_total_steps = max(1, int(metrics.get("decision_rollout_total_steps", 1)))
         tick_rollout_step = int(metrics.get("tick_rollout_step", 0))
         tick_rollout_total_steps = max(1, int(metrics.get("tick_rollout_total_steps", 1)))
         progress_pct = 100.0 * float(metrics.get("progress_frac", 0.0))
         refresh_status = str(metrics.get("refresh_status", "Last Refresh: -"))
-        env_finished_flags = [bool(x) for x in metrics.get("env_finished_flags", [])]
-        samples_per_second = int(metrics.get("samples_per_second", metrics.get("sps", 0)))
+        samples_per_second = int(metrics.get("samples_per_second", 0))
         env_steps_per_second = float(metrics.get("env_steps_per_second", 0.0))
         decision_steps_per_second = float(metrics.get("decision_steps_per_second", 0.0))
         benchmark_current = float(metrics.get("benchmark_current", 0.0))
@@ -143,115 +167,112 @@ class _TrainingVisualizer:
         tick_rollout_step_label = _format_compact_number(tick_rollout_step, decimals=2)
         tick_rollout_total_steps_label = _format_compact_number(tick_rollout_total_steps, decimals=2)
         decision_steps_to_update_label = _format_compact_number(decision_steps_to_update, decimals=2)
+        decision_steps_per_second_label = _format_compact_number(decision_steps_per_second, decimals=2)
         benchmark_games_label = _format_compact_number(benchmark_games, decimals=2)
-        recent_steps = [int(x) for x in metrics.get("active_recent_steps", [])]
-        anchor_steps = [int(x) for x in metrics.get("active_anchor_steps", [])]
-        recent_label = self._match_label("Latest vs Recent", recent_steps)
-        anchor_label = self._match_label("Latest vs Anchor", anchor_steps)
+        env_codes = [int(x) for x in metrics.get("env_opponent_codes", [])]
+        opp_label = self._opponent_label_for_env(env_codes, self.env_index)
+
+        lines: list[str] = [
+            "[MINIMAL TRAINING VIEW]" if self.collapsed else "[MINIMAL TRAINING]",
+            f"Collapsed (env {self.env_index} {opp_label})" if self.collapsed else "[TRAINING]",
+        ]
         if self.collapsed:
-            lines = [
-                "[MINIMAL TRAINING VIEW]",
-                "Collapsed mode: training running in background",
+            lines.append("")
+            lines.append("[TRAINING]")
+
+        lines.extend(
+            [
+                self._kv("Progress", f"{progress_pct:.1f}%"),
                 self._kv("Global step", global_step_label),
                 self._kv("Iteration", iteration_label),
-                self._kv("Samples/s", samples_per_second_label),
+                    self._kv("Decision/s", decision_steps_per_second_label),
                 self._kv("Env steps/s", f"{env_steps_per_second:.2f}"),
-                self._kv("Decision/s", f"{decision_steps_per_second:.2f}"),
                 self._kv("Decision step", f"{decision_rollout_step_label}/{decision_rollout_total_steps_label}"),
-                self._kv("Tick step", f"{tick_rollout_step_label}/{tick_rollout_total_steps_label}"),
-                self._kv("Steps to update", decision_steps_to_update_label),
-                self._kv("Progress", f"{progress_pct:.1f}%"),
-                self._kv("Refresh", refresh_status),
-                self._kv("Sim speed", sim_speed_label),
-                self._kv("Benchmark", f"{benchmark_current:.1f}"),
-                self._kv("Benchmark games", benchmark_games_label),
-                self._kv("Benchmark WR", f"{100.0 * benchmark_win_rate:.1f}%"),
-                self._kv("Env", str(self.env_index)),
-                "",
-                "Press Esc to restore full preview",
-                "Left/Right: switch env",
-                "T: toggle throttle (max/1x)",
-                "Close window to disable viewer",
+                # self._kv("Tick step", f"{tick_rollout_step_label}/{tick_rollout_total_steps_label}"),
             ]
-            self.renderer.draw(
-                {"entities": [], "elixir": [0.0, 0.0]},
-                lines,
-                fps_limit=5,
-                hud_grid={
-                    "title": "Opponent Per Env",
-                    "cells": env_codes,
-                    "cols": grid_cols,
-                    "cell_size": 14,
-                    "dim_mask": env_finished_flags,
-                    "palette": {
-                        0: (70, 140, 230),   # latest-latest
-                        1: (230, 145, 60),   # latest-recent
-                        2: (80, 180, 110),   # latest-anchor
-                    },
-                    "legend": [
-                        {"label": "Latest vs Latest", "color": (70, 140, 230)},
-                        {"label": recent_label, "color": (230, 145, 60)},
-                        {"label": anchor_label, "color": (80, 180, 110)},
-                    ],
-                },
-            )
-            return True
-
-        lines = [
-            "[MINIMAL TRAINING]",
-            self._kv("Global step", global_step_label),
-            self._kv("Iteration", iteration_label),
-            self._kv("Samples/s", samples_per_second_label),
-            self._kv("Env steps/s", f"{env_steps_per_second:.2f}"),
-            self._kv("Decision/s", f"{decision_steps_per_second:.2f}"),
-            self._kv("Decision step", f"{decision_rollout_step_label}/{decision_rollout_total_steps_label}"),
-            self._kv("Tick step", f"{tick_rollout_step_label}/{tick_rollout_total_steps_label}"),
-            self._kv("Steps to update", decision_steps_to_update_label),
-            self._kv("Progress", f"{progress_pct:.1f}%"),
-            self._kv("Refresh", refresh_status),
-            self._kv("Sim speed", sim_speed_label),
-            self._kv("Benchmark", f"{benchmark_current:.1f}"),
-            self._kv("Benchmark games", benchmark_games_label),
-            self._kv("Benchmark WR", f"{100.0 * benchmark_win_rate:.1f}%"),
-            "",
-            "[ENV]",
-            self._kv("Env index", str(self.env_index)),
-            self._kv("Sim time", f"{float(state.get('sim_time_s', 0.0)):.2f}s"),
-            self._kv("Done", str(bool(state.get("done", False)))),
-            self._kv("Truncated", str(bool(state.get("truncation", False)))),
-            self._kv("Entities", str(len(entities))),
-            self._kv("Pending", str(len(state.get("pending_spawns", [])))),
-            self._kv("Elixir P0", f"{float(elixir[0]):.2f}"),
-            self._kv("Elixir P1", f"{float(elixir[1]):.2f}"),
-            "",
-            "Esc: Collapse preview",
-            "Left/Right: Switch env",
-            "T: Toggle throttle",
-            "Close window: disable viewer",
-        ]
-        self.renderer.draw(
-            state,
-            lines,
-            fps_limit=self.fps,
-            hud_grid={
-                "title": "Opponent Per Env",
-                "cells": env_codes,
-                "cols": grid_cols,
-                "cell_size": 14,
-                "dim_mask": env_finished_flags,
-                "palette": {
-                    0: (70, 140, 230),   # latest-latest
-                    1: (230, 145, 60),   # latest-recent
-                    2: (80, 180, 110),   # latest-anchor
-                },
-                "legend": [
-                    {"label": "Latest vs Latest", "color": (70, 140, 230)},
-                    {"label": recent_label, "color": (230, 145, 60)},
-                    {"label": anchor_label, "color": (80, 180, 110)},
-                ],
-            },
         )
-        return True
+        if not self.collapsed:
+            lines.extend(
+                [
+                    # self._kv("Steps to update", decision_steps_to_update_label),
+                    # self._kv("Refresh", refresh_status),
+                    self._kv("Sim speed", sim_speed_label),
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "[BENCHMARK]",
+                self._kv("Rating", f"{benchmark_current:.1f}"),
+                self._kv("Games", benchmark_games_label),
+                self._kv("Win Rate", f"{100.0 * benchmark_win_rate:.1f}%"),
+            ]
+        )
+        if not self.collapsed:
+            elixir = state.get("elixir", [0.0, 0.0])
+            lines.extend(
+                [
+                    "",
+                    "[ENV]",
+                    self._kv("Env", f"{self.env_index} {opp_label}"),
+                    self._kv("Sim time", f"{float(state.get('sim_time_s', 0.0)):.2f}s"),
+                    self._kv("Pending", str(len(state.get("pending_spawns", [])))),
+                    self._kv("Elixir P0", f"{float(elixir[0]):.2f}"),
+                    self._kv("Elixir P1", f"{float(elixir[1]):.2f}"),
+                    self._kv("Done", str(bool(state.get("done", False)))),
+                    self._kv("Truncated", str(bool(state.get("truncation", False)))),
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "[CONTROLS]",
+                "Esc: Expand view  Left/Right: Switch env" if self.collapsed else "Esc: Collapse preview  Left/Right: Switch env",
+                "T: Toggle throttle  Close window: disable viewer",
+            ]
+        )
+        return lines
+
+    def _build_hud_grid(
+        self,
+        *,
+        env_codes: list[int],
+        grid_cols: int,
+        env_finished_flags: list[bool],
+        recent_steps: list[int],
+        anchor_steps: list[int],
+    ) -> dict[str, Any]:
+        recent_label = self._match_label("Latest vs Recent", recent_steps)
+        anchor_label = self._match_label("Latest vs Anchor", anchor_steps)
+        return {
+            "title": "Opponent Per Env",
+            "cells": env_codes,
+            "cols": grid_cols,
+            "cell_size": 14,
+            "dim_mask": env_finished_flags,
+            "palette": {
+                0: (70, 140, 230),   # latest-latest
+                1: (230, 145, 60),   # latest-recent
+                2: (80, 180, 110),   # latest-anchor
+            },
+            "legend": [
+                {"label": "Latest vs Latest", "color": (70, 140, 230)},
+                {"label": recent_label, "color": (230, 145, 60)},
+                {"label": anchor_label, "color": (80, 180, 110)},
+            ],
+        }
+
+    def _opponent_label_for_env(self, env_codes: list[int], env_idx: int) -> str:
+        if env_idx < 0 or env_idx >= len(env_codes):
+            return "(vs unknown)"
+        code = int(env_codes[env_idx])
+        if code == 0:
+            return "(vs latest)"
+        if code == 1:
+            return "(vs recent)"
+        if code == 2:
+            return "(vs anchor)"
+        return "(vs unknown)"
 
     def _match_label(self, prefix: str, steps: list[int]) -> str:
         if not steps:
@@ -272,6 +293,11 @@ class _TrainingVisualizer:
         self._speed_cycle_requested = False
         return requested
 
+    def target_fps(self) -> int:
+        if self.collapsed:
+            return 5
+        return self.fps
+
 
 @dataclass
 class _PolicySnapshot:
@@ -288,8 +314,8 @@ class _GpuOpponentPool:
         self.anchor_capacity = max(0, int(args.pool_anchor_capacity))
         self.active_recent_size = max(0, int(args.pool_active_recent_size))
         self.active_anchor_size = max(0, int(args.pool_active_anchor_size))
-        self.promote_every = max(1, int(args.pool_promote_every))
-        self.refresh_every = max(1, int(args.pool_refresh_every))
+        self.promote_count = max(1, int(args.pool_promote_count))
+        self.refresh_count = max(1, int(args.pool_refresh_count))
         self.anchor_every = max(1, int(args.pool_anchor_every))
         self.latest_latest_prob = max(0.0, float(args.pool_latest_latest_prob))
         self.latest_recent_prob = max(0.0, float(args.pool_latest_recent_prob))
@@ -364,11 +390,13 @@ class _GpuOpponentPool:
                 self.active_policy_kind[pid] = "anchor"
                 self.active_anchor_ids.append(pid)
 
-    def should_refresh(self, iteration: int) -> bool:
-        return self.enabled and (iteration % self.refresh_every == 0)
+    def should_refresh(self, iteration: int, *, num_iterations: int) -> bool:
+        refresh_every = max(1, int(num_iterations) // self.refresh_count)
+        return self.enabled and (iteration % refresh_every == 0)
 
-    def should_promote(self, iteration: int) -> bool:
-        return self.enabled and (iteration % self.promote_every == 0)
+    def should_promote(self, iteration: int, *, num_iterations: int) -> bool:
+        promote_every = max(1, int(num_iterations) // self.promote_count)
+        return self.enabled and (iteration % promote_every == 0)
 
     def choose_match(self) -> tuple[str, int | None]:
         if not self.enabled:
@@ -719,13 +747,15 @@ def run_training(args: Args) -> None:
             if now < next_view_update_at:
                 return
             try:
+                target_fps = max(1, int(live_view.target_fps()))
                 refresh_label = refresh_status_text
                 if refresh_label.startswith("Last Refresh:"):
                     refresh_label = f"Last Refresh: {max(0.0, now - last_refresh_wall):.1f}s"
                 env_codes = [0 if tag == "latest_latest" else 1 if tag == "latest_recent" else 2 for tag in env_match_tag]
                 elapsed = max(1e-9, now - train_start)
+                states_for_view = [] if live_view.collapsed else env.debug_state_many()
                 keep_open = live_view.update(
-                    env.debug_state_many(),
+                    states_for_view,
                     {
                         "global_step": global_step,
                         "iteration": iteration,
@@ -751,12 +781,11 @@ def run_training(args: Args) -> None:
                         "active_anchor_steps": [
                             int(pool.active_policy_step.get(int(pid), -1)) for pid in pool.active_anchor_ids
                         ],
-                        "num_envs": int(args.num_envs),
                     },
                 )
                 if live_view is not None and live_view.pop_speed_cycle_requested():
                     cycle_sim_speed_mode()
-                next_view_update_at = now + (1.0 / max(1, int(args.visualize_fps)))
+                next_view_update_at = now + (1.0 / float(target_fps))
                 if not keep_open:
                     live_view.close()
                     live_view = None
@@ -1065,10 +1094,10 @@ def run_training(args: Args) -> None:
                 benchmark_tracker.record_batch(pending_benchmark_samples)
                 pending_benchmark_samples.clear()
 
-            if pool.should_promote(iteration):
+            if pool.should_promote(iteration, num_iterations=num_iterations):
                 pool.promote(agent, step=global_step)
 
-            if pool.should_refresh(iteration):
+            if pool.should_refresh(iteration, num_iterations=num_iterations):
                 refresh_status = "Queued"
                 refresh_start = time.perf_counter()
                 pool.refresh_active()

@@ -48,9 +48,9 @@ class Args:
     pool_promote_every: int = 20
     pool_refresh_every: int = 128
     pool_anchor_every: int = 4
-    pool_latest_latest_prob: float = 0.4
-    pool_latest_recent_prob: float = 0.5
-    pool_latest_anchor_prob: float = 0.1
+    pool_latest_latest_prob: float = 0.75
+    pool_latest_recent_prob: float = 0.2
+    pool_latest_anchor_prob: float = 0.05
     pool_deterministic: bool = True
 
     benchmark_enabled: bool = True

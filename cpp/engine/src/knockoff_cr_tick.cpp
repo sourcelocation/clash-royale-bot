@@ -44,6 +44,12 @@ void ClashEnv::simulate_tick() {
 
     elixir_[0] = clampd(elixir_[0] + dt_ / base_seconds_per_elixir_, 0.0, max_elixir_);
     elixir_[1] = clampd(elixir_[1] + dt_ / base_seconds_per_elixir_, 0.0, max_elixir_);
+    if (infinite_elixir_[0]) {
+        elixir_[0] = max_elixir_;
+    }
+    if (infinite_elixir_[1]) {
+        elixir_[1] = max_elixir_;
+    }
 
     while (queue_accum_s_ >= kQueueDtS) {
         queue_accum_s_ -= kQueueDtS;
@@ -108,7 +114,7 @@ void ClashEnv::process_queue_tick() {
                     s.x = p.x;
                     s.y = p.y;
                     s.time_left_s = 2.0;
-                    s.dir_y = (p.team == 0) ? -1.0 : 1.0;
+                    s.dir_y = (p.team == 0) ? 1.0 : -1.0;
                     logs_.push_back(s);
                 }
                 remove_indices.push_back(i);

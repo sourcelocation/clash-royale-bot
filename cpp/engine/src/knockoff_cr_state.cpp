@@ -40,6 +40,12 @@ void ClashEnv::reset_state() {
     reset_requested_ = false;
     elixir_[0] = 8.0;
     elixir_[1] = 8.0;
+    if (infinite_elixir_[0]) {
+        elixir_[0] = max_elixir_;
+    }
+    if (infinite_elixir_[1]) {
+        elixir_[1] = max_elixir_;
+    }
     for (int t = 0; t < kAgentCount; ++t) {
         decks_[t] = {0, 1, 2, 3, 4, 5, 6, 7};
         std::shuffle(decks_[t].begin(), decks_[t].end(), rng_);
@@ -92,6 +98,12 @@ std::vector<int> ClashEnv::hand_for_team(int team) const {
         hand.push_back(decks_[team][i]);
     }
     return hand;
+}
+bool ClashEnv::team_has_infinite_elixir(int team) const {
+    if (team < 0 || team >= kAgentCount) {
+        return false;
+    }
+    return infinite_elixir_[team];
 }
 bool ClashEnv::card_in_hand(int team, int card_id) const {
     const auto hand = hand_for_team(team);
@@ -155,7 +167,7 @@ std::vector<double> ClashEnv::position_mask_for_card(int team, int card_id) cons
         return out;
     }
     const CardDef& card = cards_[card_id];
-    if (card.cost > elixir_[team]) {
+    if (!team_has_infinite_elixir(team) && card.cost > elixir_[team]) {
         return out;
     }
     fill_legal_positions(team, card, &out);
@@ -173,7 +185,8 @@ std::vector<double> ClashEnv::action_mask_flat(int team) const {
     for (int card_id = 0; card_id < kUsableCardCount; ++card_id) {
         const CardDef& card = cards_[card_id];
         const bool in_hand = std::find(hand.begin(), hand.end(), card_id) != hand.end();
-        const bool can_play = in_hand && card.cost <= elixir_[team] && fill_legal_positions(team, card, nullptr) > 0;
+        const bool has_elixir = team_has_infinite_elixir(team) || card.cost <= elixir_[team];
+        const bool can_play = in_hand && has_elixir && fill_legal_positions(team, card, nullptr) > 0;
         out.push_back(can_play ? 1.0 : 0.0);
         has_playable = has_playable || can_play;
     }
@@ -214,7 +227,8 @@ int ClashEnv::count_playable_cards(int team) const {
             continue;
         }
         const auto& c = cards_[card_id];
-        if (c.cost <= elixir_[team] && fill_legal_positions(team, c, nullptr) > 0) {
+        const bool has_elixir = team_has_infinite_elixir(team) || c.cost <= elixir_[team];
+        if (has_elixir && fill_legal_positions(team, c, nullptr) > 0) {
             ++count;
         }
     }
@@ -225,7 +239,12 @@ std::vector<float> ClashEnv::build_obs_vector(int for_team) const {
     const int team_self = should_flip ? 1 : 0;
     const int team_enemy = should_flip ? 0 : 1;
     std::vector<float> res;
-    res.reserve(256);
+    res.reserve(512);
+    auto append_card_onehot = [&](int card_id) {
+        for (int c = 0; c < kUsableCardCount; ++c) {
+            res.push_back((card_id == c) ? 1.0f : 0.0f);
+        }
+    };
     const double self_elixir = should_flip ? elixir_[1] : elixir_[0];
     const double enemy_elixir = should_flip ? elixir_[0] : elixir_[1];
     res.push_back(static_cast<float>(std::min(self_elixir, 10.0) / 10.0));
@@ -237,17 +256,13 @@ std::vector<float> ClashEnv::build_obs_vector(int for_team) const {
     res.push_back(static_cast<float>(static_cast<double>(count_playable_cards(team_enemy)) / static_cast<double>(kHandSize)));
     const auto hand0 = hand_for_team(0);
     const auto hand1 = hand_for_team(1);
-    const double card_norm = std::max(1.0, static_cast<double>(kUsableCardCount - 1));
     for (int i = 0; i < kHandSize; ++i) {
         const int a = (i < static_cast<int>(hand0.size())) ? hand0[i] : -1;
         const int b = (i < static_cast<int>(hand1.size())) ? hand1[i] : -1;
-        if (should_flip) {
-            res.push_back(b >= 0 ? static_cast<float>(static_cast<double>(b) / card_norm) : -1.0f);
-            res.push_back(a >= 0 ? static_cast<float>(static_cast<double>(a) / card_norm) : -1.0f);
-        } else {
-            res.push_back(a >= 0 ? static_cast<float>(static_cast<double>(a) / card_norm) : -1.0f);
-            res.push_back(b >= 0 ? static_cast<float>(static_cast<double>(b) / card_norm) : -1.0f);
-        }
+        const int self_card = should_flip ? b : a;
+        const int enemy_card = should_flip ? a : b;
+        append_card_onehot(self_card);
+        append_card_onehot(enemy_card);
     }
     std::vector<const Entity*> team_a;
     std::vector<const Entity*> team_b;
@@ -287,12 +302,7 @@ std::vector<float> ClashEnv::build_obs_vector(int for_team) const {
                 res.push_back(1.0f);
                 res.push_back(static_cast<float>((x + static_cast<double>(kGridW) / 2.0) / static_cast<double>(kGridW)));
                 res.push_back(static_cast<float>((y + static_cast<double>(kGridH) / 2.0) / static_cast<double>(kGridH)));
-                int card_idx = e->card_id;
-                if (card_idx < 0 || card_idx >= kUsableCardCount) {
-                    res.push_back(-1.0f);
-                } else {
-                    res.push_back(static_cast<float>(static_cast<double>(card_idx) / card_norm));
-                }
+                append_card_onehot(e->card_id);
                 const double hp_frac = e->max_hp > 1e-9 ? e->hp / e->max_hp : 0.0;
                 res.push_back(static_cast<float>(clampd(hp_frac, 0.0, 1.0)));
                 const bool is_building = (e->kind == ENTITY_BUILDING || e->kind == ENTITY_TOWER);
@@ -301,7 +311,9 @@ std::vector<float> ClashEnv::build_obs_vector(int for_team) const {
                 res.push_back(0.0f);
                 res.push_back(0.0f);
                 res.push_back(0.0f);
-                res.push_back(-1.0f);
+                for (int c = 0; c < kUsableCardCount; ++c) {
+                    res.push_back(0.0f);
+                }
                 res.push_back(0.0f);
                 res.push_back(0.0f);
             }
@@ -476,6 +488,10 @@ py::dict ClashEnv::debug_state() const {
     elixir.append(elixir_[0]);
     elixir.append(elixir_[1]);
     out["elixir"] = elixir;
+    py::list infinite_elixir;
+    infinite_elixir.append(infinite_elixir_[0]);
+    infinite_elixir.append(infinite_elixir_[1]);
+    out["infinite_elixir_teams"] = infinite_elixir;
 
     py::list entities;
     for (const auto& e : entities_) {

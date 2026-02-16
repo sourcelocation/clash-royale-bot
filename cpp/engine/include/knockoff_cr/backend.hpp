@@ -206,6 +206,7 @@ private:
     std::vector<LogSpell> logs_;
     std::array<std::vector<int>, 2> decks_;
     std::array<double, 2> elixir_ = {8.0, 8.0};
+    std::array<bool, 2> infinite_elixir_ = {false, false};
     double base_seconds_per_elixir_ = 2.8;
     double max_elixir_ = 10.0;
     bool episode_done_ = false;
@@ -244,6 +245,7 @@ private:
     void reset_state();
     void add_tower(int team, bool king, bool active, int gx, int gy, double hp);
     std::vector<int> hand_for_team(int team) const;
+    bool team_has_infinite_elixir(int team) const;
     bool card_in_hand(int team, int card_id) const;
     void cycle_deck_after_play(int team, int card_id);
     bool legal_placement_for_card(int team, const CardDef& card, int action_x, int action_y) const;

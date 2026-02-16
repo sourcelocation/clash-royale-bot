@@ -91,12 +91,24 @@ py::dict ClashEnv::reset(int seed_value, py::dict options) {
 
     team_controllers_[0] = "external";
     team_controllers_[1] = "external";
+    infinite_elixir_[0] = false;
+    infinite_elixir_[1] = false;
     if (options.contains("team_controllers")) {
         try {
             py::list ctrls = py::cast<py::list>(options["team_controllers"]);
             if (py::len(ctrls) >= 2) {
                 team_controllers_[0] = py::cast<std::string>(ctrls[0]);
                 team_controllers_[1] = py::cast<std::string>(ctrls[1]);
+            }
+        } catch (const std::exception&) {
+        }
+    }
+    if (options.contains("infinite_elixir_teams")) {
+        try {
+            py::list teams = py::cast<py::list>(options["infinite_elixir_teams"]);
+            if (py::len(teams) >= 2) {
+                infinite_elixir_[0] = py::cast<bool>(teams[0]);
+                infinite_elixir_[1] = py::cast<bool>(teams[1]);
             }
         } catch (const std::exception&) {
         }

@@ -45,6 +45,7 @@ Entity* refresh_lock(Entity& e, Entity* lock, IsValidLock&& is_valid_lock, Shoul
 
 constexpr double kDiagStepCost = 1.41421356237;
 constexpr double kLineSampleStepTiles = 0.25;
+constexpr double kLogLengthTiles = 5.0;
 } // namespace
 bool ClashEnv::can_target(const Entity& attacker, const Entity& target) const {
     if (!is_alive(target) || attacker.team == target.team) {
@@ -354,8 +355,14 @@ void ClashEnv::process_logs() {
     for (int i = 0; i < static_cast<int>(logs_.size()); ++i) {
         auto& s = logs_[i];
         s.time_left_s -= dt_;
+        const double prev_y = s.y;
         s.y += cards_[kCardLog].speed * s.dir_y * dt_;
-        const double r2 = cards_[kCardLog].attack_range * cards_[kCardLog].attack_range;
+        const double half_width = cards_[kCardLog].attack_range;
+        const double half_len = 0.5 * kLogLengthTiles;
+        const double min_x = s.x - half_len;
+        const double max_x = s.x + half_len;
+        const double min_y = std::min(prev_y, s.y) - half_width;
+        const double max_y = std::max(prev_y, s.y) + half_width;
         for (auto& e : entities_) {
             if (!is_alive(e) || e.team == s.team) {
                 continue;
@@ -363,7 +370,9 @@ void ClashEnv::process_logs() {
             if (s.hit_entity_ids.count(e.id) > 0) {
                 continue;
             }
-            if (dist2(s.x, s.y, e.x, e.y) <= r2) {
+            const bool in_x = (e.x >= min_x && e.x <= max_x);
+            const bool in_y = (e.y >= min_y && e.y <= max_y);
+            if (in_x && in_y) {
                 s.hit_entity_ids.insert(e.id);
                 ++s.hit_count;
                 const int dmg = (e.kind == ENTITY_TOWER) ? cards_[kCardLog].tower_damage : cards_[kCardLog].damage;

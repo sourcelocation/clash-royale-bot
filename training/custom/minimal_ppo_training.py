@@ -190,7 +190,6 @@ class _TrainingVisualizer:
 
         lines = [
             "[MINIMAL TRAINING]",
-            self._kv("Env index", str(self.env_index)),
             self._kv("Global step", global_step_label),
             self._kv("Iteration", iteration_label),
             self._kv("Samples/s", samples_per_second_label),
@@ -205,6 +204,7 @@ class _TrainingVisualizer:
             self._kv("Benchmark WR", f"{100.0 * benchmark_win_rate:.1f}%"),
             "",
             "[ENV]",
+            self._kv("Env index", str(self.env_index)),
             self._kv("Sim time", f"{float(state.get('sim_time_s', 0.0)):.2f}s"),
             self._kv("Done", str(bool(state.get("done", False)))),
             self._kv("Truncated", str(bool(state.get("truncation", False)))),
@@ -591,6 +591,26 @@ def run_training(args: Args) -> None:
             ema_alpha=float(args.benchmark_ema_alpha),
         )
         pending_benchmark_samples: list[tuple[int, float]] = []
+        last_saved_checkpoint: Path | None = None
+
+        def save_checkpoint(path: Path, *, iteration_value: int, is_final: bool) -> None:
+            nonlocal last_saved_checkpoint
+            torch.save(
+                {
+                    "args": vars(args),
+                    "iteration": int(iteration_value),
+                    "global_step": int(global_step),
+                    "model_state_dict": agent.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "benchmark_rating": float(benchmark_tracker.current_rating),
+                    "benchmark_games": int(benchmark_tracker.total_games),
+                    "benchmark_win_rate": float(benchmark_tracker.win_rate),
+                    "experiment_name": str(experiment_dir.name),
+                    "is_final": bool(is_final),
+                },
+                path,
+            )
+            last_saved_checkpoint = path
 
         assign_rng = np.random.default_rng(int(args.seed) + 17)
 
@@ -1078,16 +1098,10 @@ def run_training(args: Args) -> None:
 
             if int(args.ckpt_every) > 0 and iteration % int(args.ckpt_every) == 0:
                 ckpt_path = experiment_dir / f"ckpt_iter_{iteration:06d}.pt"
-                torch.save(
-                    {
-                        "args": vars(args),
-                        "iteration": int(iteration),
-                        "global_step": int(global_step),
-                        "model_state_dict": agent.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                    },
-                    ckpt_path,
-                )
+                save_checkpoint(ckpt_path, iteration_value=int(iteration), is_final=False)
+
+        final_ckpt_path = experiment_dir / "ckpt_final.pt"
+        save_checkpoint(final_ckpt_path, iteration_value=int(num_iterations), is_final=True)
 
         total_s = max(1e-9, time.perf_counter() - train_start)
         overall_sample_sps = float(global_step / total_s)
@@ -1095,6 +1109,8 @@ def run_training(args: Args) -> None:
         summary = {
             "experiment_dir": str(experiment_dir),
             "tensorboard_dir": str(tb_dir),
+            "final_checkpoint": str(final_ckpt_path),
+            "last_saved_checkpoint": str(last_saved_checkpoint) if last_saved_checkpoint is not None else "",
             "global_step": int(global_step),
             "num_iterations": int(num_iterations),
             "overall_sps": overall_sample_sps,

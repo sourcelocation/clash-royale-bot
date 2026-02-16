@@ -131,7 +131,7 @@ PlayResult ClashEnv::play_card_with_reason(int team, int card_id, int action_x, 
         return out;
     }
     const CardDef& card = cards_[card_id];
-    if (card.cost > elixir_[team]) {
+    if (!team_has_infinite_elixir(team) && card.cost > elixir_[team]) {
         out.reason = "insufficient_elixir";
         return out;
     }
@@ -143,8 +143,10 @@ PlayResult ClashEnv::play_card_with_reason(int team, int card_id, int action_x, 
         out.reason = "illegal_position";
         return out;
     }
-    elixir_[team] -= static_cast<double>(card.cost);
-    elixir_[team] = clampd(elixir_[team], 0.0, max_elixir_);
+    if (!team_has_infinite_elixir(team)) {
+        elixir_[team] -= static_cast<double>(card.cost);
+        elixir_[team] = clampd(elixir_[team], 0.0, max_elixir_);
+    }
     cycle_deck_after_play(team, card_id);
     const auto [ix, iy] = action_to_internal_grid(team, action_x, action_y);
     const auto [wx, wy] = internal_to_world(ix, iy);

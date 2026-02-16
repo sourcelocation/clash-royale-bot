@@ -43,6 +43,10 @@ CARD_COLORS = {
     7: (220, 170, 90),
 }
 
+FIREBALL_RADIUS_TILES = 2.5
+LOG_RADIUS_TILES = 1.0
+LOG_LENGTH_TILES = 5.0
+
 
 def kv(key: str, value: str, width: int = 14) -> str:
     return f"{key:<{width}} {value}"
@@ -133,7 +137,12 @@ class ArenaRenderer:
             "esc": False,
             "left": False,
             "right": False,
+            "up": False,
+            "down": False,
+            "enter": False,
             "speed_cycle": False,
+            "key_downs": [],
+            "mouse_left_clicks": [],
         }
         if self.closed:
             out["quit"] = True
@@ -159,8 +168,17 @@ class ArenaRenderer:
                     out["left"] = True
                 elif event.key == self.pygame.K_RIGHT:
                     out["right"] = True
+                elif event.key == self.pygame.K_UP:
+                    out["up"] = True
+                elif event.key == self.pygame.K_DOWN:
+                    out["down"] = True
+                elif event.key in (self.pygame.K_RETURN, self.pygame.K_KP_ENTER):
+                    out["enter"] = True
                 elif event.key == self.pygame.K_t:
                     out["speed_cycle"] = True
+                out["key_downs"].append(int(event.key))
+            elif event.type == self.pygame.MOUSEBUTTONDOWN and event.button == 1:
+                out["mouse_left_clicks"].append((int(event.pos[0]), int(event.pos[1])))
         if out["quit"]:
             self.close()
         return out
@@ -212,6 +230,9 @@ class ArenaRenderer:
         rx1, _ = self._grid_to_viewport(right_x1, bridge_y1, viewport)
         self.pygame.draw.rect(self.screen, (185, 170, 120), self.pygame.Rect(lx0, by0, max(1, lx1 - lx0), max(1, by1 - by0)))
         self.pygame.draw.rect(self.screen, (185, 170, 120), self.pygame.Rect(rx0, by0, max(1, rx1 - rx0), max(1, by1 - by0)))
+
+        # Draw spell AOE overlays before entities so troops remain readable on top.
+        self._draw_spell_effects(state=state, viewport=viewport)
 
         entities = state.get("entities", [])
         tile_scale = min(vw / GRID_W, vh / GRID_H)
@@ -275,6 +296,68 @@ class ArenaRenderer:
             "arena_h": float(vh),
             "aspect": float(vw / max(1, vh)),
         }
+
+    def _draw_spell_effects(
+        self,
+        *,
+        state: dict[str, Any],
+        viewport: tuple[int, int, int, int],
+    ) -> None:
+        vx, vy, vw, vh = viewport
+        if vw <= 0 or vh <= 0:
+            return
+        tile_scale = min(vw / GRID_W, vh / GRID_H)
+        overlay = self.pygame.Surface((vw, vh), self.pygame.SRCALPHA)
+
+        fireballs = state.get("fireballs", [])
+        for f in fireballs:
+            fx = float(f.get("x", 0.0))
+            fy = float(f.get("y", 0.0))
+            team = int(f.get("team", 0))
+            px, py = self._world_to_viewport(fx, fy, viewport)
+            lx = px - vx
+            ly = py - vy
+            radius_px = max(4, int(FIREBALL_RADIUS_TILES * tile_scale))
+            if team == 0:
+                fill = (255, 125, 80, 72)
+                edge = (255, 165, 120, 180)
+            else:
+                fill = (255, 95, 95, 72)
+                edge = (255, 145, 145, 180)
+            self.pygame.draw.circle(overlay, fill, (lx, ly), radius_px)
+            self.pygame.draw.circle(overlay, edge, (lx, ly), radius_px, 2)
+
+        logs = state.get("logs", [])
+        for s in logs:
+            sx = float(s.get("x", 0.0))
+            sy = float(s.get("y", 0.0))
+            team = int(s.get("team", 0))
+            half_len = 0.5 * LOG_LENGTH_TILES
+            ax = sx - half_len
+            bx = sx + half_len
+            px0, py0 = self._world_to_viewport(ax, sy, viewport)
+            px1, py1 = self._world_to_viewport(bx, sy, viewport)
+            lx0 = px0 - vx
+            ly0 = py0 - vy
+            lx1 = px1 - vx
+            ly1 = py1 - vy
+            half_w_px = max(2, int(LOG_RADIUS_TILES * tile_scale))
+            left = int(min(lx0, lx1))
+            right = int(max(lx0, lx1))
+            top = int(min(ly0, ly1) - half_w_px)
+            bottom = int(max(ly0, ly1) + half_w_px)
+            rect_w = max(1, right - left)
+            rect_h = max(1, bottom - top)
+            if team == 0:
+                fill = (210, 170, 85, 82)
+                edge = (235, 195, 115, 190)
+            else:
+                fill = (195, 125, 90, 82)
+                edge = (220, 155, 120, 190)
+            self.pygame.draw.rect(overlay, fill, self.pygame.Rect(left, top, rect_w, rect_h))
+            self.pygame.draw.rect(overlay, edge, self.pygame.Rect(left, top, rect_w, rect_h), 2)
+
+        self.screen.blit(overlay, (vx, vy))
 
     def _draw_hud_grid(self, *, hx: int, hy: int, hw: int, hh: int, start_y: int, grid: dict[str, Any]) -> None:
         cells = list(grid.get("cells", []))

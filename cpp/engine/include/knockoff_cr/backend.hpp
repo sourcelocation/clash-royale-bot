@@ -226,6 +226,9 @@ private:
     double queue_time_s_ = 0.0;
     int next_entity_id_ = 1;
     int next_spawn_id_ = 1;
+    mutable std::array<std::array<std::vector<double>, kUsableCardCount>, 2> static_legal_position_masks_;
+    mutable std::array<std::array<int, kUsableCardCount>, 2> static_legal_position_counts_ = {};
+    mutable std::array<std::array<bool, kUsableCardCount>, 2> static_legal_position_ready_ = {};
     int region_width() const;
     int region_height() const;
     int placement_region_count() const;
@@ -248,6 +251,7 @@ private:
     bool team_has_infinite_elixir(int team) const;
     bool card_in_hand(int team, int card_id) const;
     void cycle_deck_after_play(int team, int card_id);
+    void ensure_static_legal_positions_cached(int team, int card_id) const;
     bool legal_placement_for_card(int team, const CardDef& card, int action_x, int action_y) const;
     int fill_legal_positions(int team, const CardDef& card, std::vector<double>* mask_out) const;
     std::vector<double> position_mask_for_card(int team, int card_id) const;

@@ -125,11 +125,37 @@ void ClashEnv::cycle_deck_after_play(int team, int card_id) {
         deck.insert(deck.begin() + index_in_hand, new_card);
     }
 }
+void ClashEnv::ensure_static_legal_positions_cached(int team, int card_id) const {
+    if (team < 0 || team >= kAgentCount) {
+        return;
+    }
+    if (card_id < 0 || card_id >= kUsableCardCount) {
+        return;
+    }
+    if (static_legal_position_ready_[team][card_id]) {
+        return;
+    }
+    std::vector<double>& cached = static_legal_position_masks_[team][card_id];
+    cached.assign(kGridW * kGridH, 0.0);
+    int legal_count = 0;
+    const CardDef& card = cards_[card_id];
+    for (int y = 0; y < kGridH; ++y) {
+        for (int x = 0; x < kGridW; ++x) {
+            const bool legal = legal_placement_for_card(team, card, x, y);
+            cached[y * kGridW + x] = legal ? 1.0 : 0.0;
+            if (legal) {
+                ++legal_count;
+            }
+        }
+    }
+    static_legal_position_counts_[team][card_id] = legal_count;
+    static_legal_position_ready_[team][card_id] = true;
+}
 bool ClashEnv::legal_placement_for_card(int team, const CardDef& card, int action_x, int action_y) const {
     if (action_x < 0 || action_x >= kGridW || action_y < 0 || action_y >= kGridH) {
         return false;
     }
-    if (card.type == CARD_SPELL) {
+    if (card.type == CARD_SPELL && card.name != "Log") {
         return true;
     }
     if (action_y >= kHalfH) {
@@ -143,7 +169,21 @@ bool ClashEnv::legal_placement_for_card(int team, const CardDef& card, int actio
     return true;
 }
 int ClashEnv::fill_legal_positions(int team, const CardDef& card, std::vector<double>* mask_out) const {
+    const CardDef* base = cards_.data();
+    const CardDef* ptr = &card;
+    if (ptr >= base && ptr < (base + kUsableCardCount)) {
+        const int card_id = static_cast<int>(ptr - base);
+        ensure_static_legal_positions_cached(team, card_id);
+        if (mask_out != nullptr) {
+            *mask_out = static_legal_position_masks_[team][card_id];
+        }
+        return static_legal_position_counts_[team][card_id];
+    }
+
     int legal_count = 0;
+    if (mask_out != nullptr) {
+        mask_out->assign(kGridW * kGridH, 0.0);
+    }
     for (int y = 0; y < kGridH; ++y) {
         for (int x = 0; x < kGridW; ++x) {
             const bool legal = legal_placement_for_card(team, card, x, y);

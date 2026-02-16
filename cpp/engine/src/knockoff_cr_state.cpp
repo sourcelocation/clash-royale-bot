@@ -34,7 +34,6 @@ void ClashEnv::reset_state() {
     queue_accum_s_ = 0.0;
     queue_time_s_ = 0.0;
     time_since_tower_damaged_ = 0.0;
-    time_since_tower_reward_ = 0.0;
     episode_done_ = false;
     episode_truncated_ = false;
     reset_requested_ = false;
@@ -58,7 +57,6 @@ void ClashEnv::reset_state() {
     add_tower(/*team=*/0, /*king=*/false, /*active=*/true, /*gx=*/12, /*gy=*/27, /*hp=*/4420.0);
     initial_tower_health_[0] = sum_visible_tower_health(0);
     initial_tower_health_[1] = sum_visible_tower_health(1);
-    last_tower_health_ = initial_tower_health_;
 }
 void ClashEnv::add_tower(int team, bool king, bool active, int gx, int gy, double hp) {
     Entity e;
@@ -597,25 +595,5 @@ py::dict ClashEnv::debug_state() const {
     }
     out["logs"] = logs;
     return out;
-}
-void ClashEnv::collect_tower_rewards() {
-    const double current_team0 = sum_visible_tower_health(0);
-    const double current_team1 = sum_visible_tower_health(1);
-    const double damage_to_team0 = std::max(0.0, last_tower_health_[0] - current_team0);
-    const double damage_to_team1 = std::max(0.0, last_tower_health_[1] - current_team1);
-    if (damage_to_team1 > 0.0) {
-        const double dealt_ratio = damage_to_team1 / std::max(1.0, initial_tower_health_[1]);
-        const double dealt = clampd(dealt_ratio * kTowerHpDeltaRewardScale, 0.0, kTowerHpDeltaRewardClip);
-        add_reward(0, dealt, "tower_damage_dealt");
-        add_reward(1, -dealt, "tower_damage_taken");
-    }
-    if (damage_to_team0 > 0.0) {
-        const double taken_ratio = damage_to_team0 / std::max(1.0, initial_tower_health_[0]);
-        const double taken = clampd(taken_ratio * kTowerHpDeltaRewardScale, 0.0, kTowerHpDeltaRewardClip);
-        add_reward(0, -taken, "tower_damage_taken");
-        add_reward(1, taken, "tower_damage_dealt");
-    }
-    last_tower_health_[0] = current_team0;
-    last_tower_health_[1] = current_team1;
 }
 } // namespace knockoff_cr

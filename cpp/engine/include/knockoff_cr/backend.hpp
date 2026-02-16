@@ -23,9 +23,8 @@ inline constexpr double kBridgeWidthTiles = 2.0;
 inline constexpr int kUsableCardCount = 8;
 inline constexpr int kHandSize = 4;
 inline constexpr int kMaxEntitiesPerTeamObs = 8;
-inline constexpr double kTowerHpDeltaRewardScale = 0.6;
-inline constexpr double kTowerHpDeltaRewardClip = 0.05;
 inline constexpr double kTerminalReward = 3.0;
+inline constexpr double kTowerDamageRewardMultiplier = 0.5;
 inline constexpr int kPlacementRegionCols = 3;
 inline constexpr int kPlacementRegionRows = 3;
 inline constexpr double kSpawnMinDelayS = 1.0;
@@ -218,9 +217,7 @@ private:
     std::array<TeamStats, 2> action_stats_;
     std::array<std::string, 2> team_controllers_ = {"external", "external"};
     std::array<double, 2> initial_tower_health_ = {1.0, 1.0};
-    std::array<double, 2> last_tower_health_ = {1.0, 1.0};
     double time_since_tower_damaged_ = 0.0;
-    double time_since_tower_reward_ = 0.0;
     double sim_time_s_ = 0.0;
     double queue_accum_s_ = 0.0;
     double queue_time_s_ = 0.0;
@@ -262,7 +259,6 @@ private:
     std::vector<float> build_obs_vector(int for_team) const;
     std::vector<std::vector<double>> all_card_position_masks(int team) const;
     py::dict build_transition(py::dict info, py::tuple action_applied, int ticks_simulated, int ticks_requested);
-    void collect_tower_rewards();
     bool apply_action(int team, const py::dict& action);
     bool apply_action(int team, const ExternalAction& action);
     PlayResult play_card_with_reason(int team, int card_id, int action_x, int action_y);

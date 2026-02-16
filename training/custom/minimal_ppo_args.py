@@ -44,14 +44,14 @@ class Args:
     pool_enabled: bool = True
     pool_recent_capacity: int = 32
     pool_anchor_capacity: int = 8
-    pool_active_recent_size: int = 2
-    pool_active_anchor_size: int = 1
-    pool_promote_count: int = 20
-    pool_refresh_count: int = 20
+    pool_active_recent_size: int = 5
+    pool_active_anchor_size: int = 2
+    pool_promote_count: int = 32
+    pool_refresh_count: int = 100
     pool_anchor_every: int = 4
-    pool_latest_latest_prob: float = 0.4
-    pool_latest_recent_prob: float = 0.5
-    pool_latest_anchor_prob: float = 0.1
+    pool_latest_latest_prob: float = 0.3
+    pool_latest_recent_prob: float = 0.55
+    pool_latest_anchor_prob: float = 0.15
     pool_deterministic: bool = True
 
     benchmark_enabled: bool = True

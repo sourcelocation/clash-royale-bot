@@ -1032,6 +1032,18 @@ def run_training(args: Args) -> None:
             b_ret = returns.reshape(-1)
             b_val = values.reshape(-1)
             b_train = train_mask.reshape(-1)
+            if wait_idx is None:
+                wait_selected_ratio = 0.0
+                wait_selected_trainable_ratio = 0.0
+            else:
+                wait_selected = (b_actions[:, int(wait_idx)] == 1).to(dtype=torch.float32)
+                wait_selected_ratio = float(wait_selected.mean().item())
+                train_weight = b_train.to(dtype=torch.float32)
+                train_weight_sum = float(train_weight.sum().item())
+                if train_weight_sum > 0.0:
+                    wait_selected_trainable_ratio = float(((wait_selected * train_weight).sum() / train_weight_sum).item())
+                else:
+                    wait_selected_trainable_ratio = 0.0
 
             active = torch.nonzero(b_train > 0.5, as_tuple=False).reshape(-1)
             if active.numel() == 0:
@@ -1154,6 +1166,8 @@ def run_training(args: Args) -> None:
                 writer.add_scalar("charts/samples_per_second", sample_sps, global_step)
                 writer.add_scalar("charts/decision_steps_per_second", sample_sps, global_step)
                 writer.add_scalar("charts/env_steps_per_second", env_step_sps, global_step)
+                writer.add_scalar("charts/wait_selected_ratio", wait_selected_ratio, global_step)
+                writer.add_scalar("charts/wait_selected_ratio_trainable", wait_selected_trainable_ratio, global_step)
                 writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
                 writer.add_scalar("timing/iteration_seconds", iter_s, global_step)
                 writer.add_scalar("timing/rollout_seconds", rollout_s, global_step)

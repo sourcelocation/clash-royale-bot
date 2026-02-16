@@ -280,9 +280,18 @@ void ClashEnv::apply_damage(Entity& target, int dmg, int source_team, int source
     if (!is_alive(target) || dmg <= 0) {
         return;
     }
+    const double hp_before = target.hp;
     target.hp -= static_cast<double>(dmg);
     if (target.kind == ENTITY_TOWER) {
         time_since_tower_damaged_ = 0.0;
+        const double hp_after = std::max(0.0, target.hp);
+        const double dealt = std::max(0.0, hp_before - hp_after);
+        const double dealt_ratio = dealt / std::max(1.0, initial_tower_health_[target.team]);
+        const double shaped = kTerminalReward * kTowerDamageRewardMultiplier * dealt_ratio;
+        if (shaped > 0.0 && source_team >= 0 && source_team < kAgentCount && source_team != target.team) {
+            add_reward(source_team, shaped, "tower_damage_dealt");
+            add_reward(target.team, -shaped, "tower_damage_taken");
+        }
     }
     if (target.hp > 0.0) {
         return;
@@ -314,7 +323,6 @@ void ClashEnv::apply_damage(Entity& target, int dmg, int source_team, int source
             }
         }
     }
-    (void)source_team;
     (void)source_card;
     (void)from_spell;
 }

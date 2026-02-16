@@ -40,7 +40,6 @@ void ClashEnv::simulate_tick() {
     sim_time_s_ += dt_;
     queue_accum_s_ += dt_;
     time_since_tower_damaged_ += dt_;
-    time_since_tower_reward_ += dt_;
 
     elixir_[0] = clampd(elixir_[0] + dt_ / base_seconds_per_elixir_, 0.0, max_elixir_);
     elixir_[1] = clampd(elixir_[1] + dt_ / base_seconds_per_elixir_, 0.0, max_elixir_);
@@ -55,11 +54,6 @@ void ClashEnv::simulate_tick() {
         queue_accum_s_ -= kQueueDtS;
         queue_time_s_ += kQueueDtS;
         process_queue_tick();
-    }
-
-    if (time_since_tower_reward_ >= 0.2) {
-        time_since_tower_reward_ = 0.0;
-        collect_tower_rewards();
     }
 
     process_fireballs();

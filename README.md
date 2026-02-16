@@ -15,7 +15,7 @@ This repository pairs a Godot 4 front-end with a PPO training loop that runs aga
 From repo root:
 
 ```bash
-./cpp/build_backend.sh
+./cpp/compile.sh
 ```
 
 The script checks for `pybind11`, invokes CMake in `cpp/build/`, and places the

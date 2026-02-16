@@ -4,7 +4,7 @@ Run from repo root.
 
 ## Build
 ```bash
-./cpp/build_backend.sh
+./cpp/compile.sh
 ```
 
 ## Validate Environment (single-env smoke)

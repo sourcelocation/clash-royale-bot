@@ -118,14 +118,19 @@ class _TrainingVisualizer:
         env_codes = [int(x) for x in metrics.get("env_opponent_codes", [])]
         env_count = max(1, int(metrics.get("num_envs", max(1, len(env_codes)))))
         grid_cols = max(1, int(math.ceil(math.sqrt(env_count))))
-        steps_to_update = int(metrics.get("steps_to_update", 0))
-        rollout_step = int(metrics.get("rollout_step", 0))
-        total_rollout_steps = max(1, int(metrics.get("rollout_total_steps", 1)))
+        decision_steps_to_update = int(metrics.get("decision_steps_to_update", metrics.get("steps_to_update", 0)))
+        decision_rollout_step = int(metrics.get("decision_rollout_step", metrics.get("rollout_step", 0)))
+        decision_rollout_total_steps = max(
+            1, int(metrics.get("decision_rollout_total_steps", metrics.get("rollout_total_steps", 1)))
+        )
+        tick_rollout_step = int(metrics.get("tick_rollout_step", 0))
+        tick_rollout_total_steps = max(1, int(metrics.get("tick_rollout_total_steps", 1)))
         progress_pct = 100.0 * float(metrics.get("progress_frac", 0.0))
         refresh_status = str(metrics.get("refresh_status", "Last Refresh: -"))
         env_finished_flags = [bool(x) for x in metrics.get("env_finished_flags", [])]
         samples_per_second = int(metrics.get("samples_per_second", metrics.get("sps", 0)))
         env_steps_per_second = float(metrics.get("env_steps_per_second", 0.0))
+        decision_steps_per_second = float(metrics.get("decision_steps_per_second", 0.0))
         benchmark_current = float(metrics.get("benchmark_current", 0.0))
         benchmark_games = int(metrics.get("benchmark_games", 0))
         benchmark_win_rate = float(metrics.get("benchmark_win_rate", 0.0))
@@ -133,9 +138,11 @@ class _TrainingVisualizer:
         global_step_label = _format_compact_number(int(metrics.get("global_step", 0)), decimals=2)
         iteration_label = _format_compact_number(int(metrics.get("iteration", 0)), decimals=2)
         samples_per_second_label = _format_compact_number(samples_per_second, decimals=2)
-        rollout_step_label = _format_compact_number(rollout_step, decimals=2)
-        total_rollout_steps_label = _format_compact_number(total_rollout_steps, decimals=2)
-        steps_to_update_label = _format_compact_number(steps_to_update, decimals=2)
+        decision_rollout_step_label = _format_compact_number(decision_rollout_step, decimals=2)
+        decision_rollout_total_steps_label = _format_compact_number(decision_rollout_total_steps, decimals=2)
+        tick_rollout_step_label = _format_compact_number(tick_rollout_step, decimals=2)
+        tick_rollout_total_steps_label = _format_compact_number(tick_rollout_total_steps, decimals=2)
+        decision_steps_to_update_label = _format_compact_number(decision_steps_to_update, decimals=2)
         benchmark_games_label = _format_compact_number(benchmark_games, decimals=2)
         recent_steps = [int(x) for x in metrics.get("active_recent_steps", [])]
         anchor_steps = [int(x) for x in metrics.get("active_anchor_steps", [])]
@@ -149,8 +156,10 @@ class _TrainingVisualizer:
                 self._kv("Iteration", iteration_label),
                 self._kv("Samples/s", samples_per_second_label),
                 self._kv("Env steps/s", f"{env_steps_per_second:.2f}"),
-                self._kv("Rollout step", f"{rollout_step_label}/{total_rollout_steps_label}"),
-                self._kv("Steps to update", steps_to_update_label),
+                self._kv("Decision/s", f"{decision_steps_per_second:.2f}"),
+                self._kv("Decision step", f"{decision_rollout_step_label}/{decision_rollout_total_steps_label}"),
+                self._kv("Tick step", f"{tick_rollout_step_label}/{tick_rollout_total_steps_label}"),
+                self._kv("Steps to update", decision_steps_to_update_label),
                 self._kv("Progress", f"{progress_pct:.1f}%"),
                 self._kv("Refresh", refresh_status),
                 self._kv("Sim speed", sim_speed_label),
@@ -194,8 +203,10 @@ class _TrainingVisualizer:
             self._kv("Iteration", iteration_label),
             self._kv("Samples/s", samples_per_second_label),
             self._kv("Env steps/s", f"{env_steps_per_second:.2f}"),
-            self._kv("Rollout step", f"{rollout_step_label}/{total_rollout_steps_label}"),
-            self._kv("Steps to update", steps_to_update_label),
+            self._kv("Decision/s", f"{decision_steps_per_second:.2f}"),
+            self._kv("Decision step", f"{decision_rollout_step_label}/{decision_rollout_total_steps_label}"),
+            self._kv("Tick step", f"{tick_rollout_step_label}/{tick_rollout_total_steps_label}"),
+            self._kv("Steps to update", decision_steps_to_update_label),
             self._kv("Progress", f"{progress_pct:.1f}%"),
             self._kv("Refresh", refresh_status),
             self._kv("Sim speed", sim_speed_label),
@@ -451,8 +462,8 @@ class _BenchmarkTracker:
 
 
 def run_training(args: Args) -> None:
-    if args.num_envs <= 0 or args.num_steps <= 0 or args.num_minibatches <= 0:
-        raise ValueError("num_envs/num_steps/num_minibatches must be > 0")
+    if args.num_envs <= 0 or args.num_steps <= 0 or args.num_minibatches <= 0 or args.ticks_per_decision <= 0:
+        raise ValueError("num_envs/num_steps/num_minibatches/ticks_per_decision must be > 0")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -500,7 +511,7 @@ def run_training(args: Args) -> None:
             raise ValueError(f"Minimal pool trainer currently supports exactly 2 agents, got {agent_count}")
 
         sim_speed_mode = _normalize_sim_speed_mode(args.sim_speed_mode)
-        decision_interval_ticks = max(1, int(args.cpp_tick_hz))
+        ticks_per_decision = max(1, int(args.ticks_per_decision))
         tick_delay_s = _tick_delay_seconds_for_mode(sim_speed_mode, int(args.cpp_tick_hz))
 
         def build_reset_options(count: int) -> list[dict]:
@@ -694,8 +705,10 @@ def run_training(args: Args) -> None:
         def maybe_update_live_view(
             *,
             iteration: int,
-            rollout_step: int,
-            steps_to_update: int,
+            decision_rollout_step: int,
+            decision_steps_to_update: int,
+            tick_rollout_step: int,
+            tick_rollout_total_steps: int,
             env_finished_flags: np.ndarray,
             refresh_status_text: str,
         ) -> None:
@@ -718,9 +731,12 @@ def run_training(args: Args) -> None:
                         "iteration": iteration,
                         "samples_per_second": int(global_step / elapsed),
                         "env_steps_per_second": float(env_batch_steps) / elapsed,
-                        "rollout_step": int(rollout_step),
-                        "rollout_total_steps": int(args.num_steps),
-                        "steps_to_update": max(0, int(steps_to_update)),
+                        "decision_steps_per_second": float(global_step) / elapsed,
+                        "decision_rollout_step": int(decision_rollout_step),
+                        "decision_rollout_total_steps": int(args.num_steps),
+                        "decision_steps_to_update": max(0, int(decision_steps_to_update)),
+                        "tick_rollout_step": int(tick_rollout_step),
+                        "tick_rollout_total_steps": int(tick_rollout_total_steps),
                         "progress_frac": min(1.0, float(global_step) / float(max(1, args.total_timesteps))),
                         "env_opponent_codes": env_codes,
                         "env_finished_flags": [bool(x) for x in env_finished_flags.tolist()],
@@ -755,8 +771,10 @@ def run_training(args: Args) -> None:
             *,
             sleep_s: float,
             iteration: int,
-            rollout_step: int,
-            steps_to_update: int,
+            decision_rollout_step: int,
+            decision_steps_to_update: int,
+            tick_rollout_step: int,
+            tick_rollout_total_steps: int,
             env_finished_flags: np.ndarray,
             refresh_status_text: str,
         ) -> None:
@@ -773,8 +791,10 @@ def run_training(args: Args) -> None:
                     break
                 maybe_update_live_view(
                     iteration=iteration,
-                    rollout_step=rollout_step,
-                    steps_to_update=steps_to_update,
+                    decision_rollout_step=decision_rollout_step,
+                    decision_steps_to_update=decision_steps_to_update,
+                    tick_rollout_step=tick_rollout_step,
+                    tick_rollout_total_steps=tick_rollout_total_steps,
                     env_finished_flags=env_finished_flags,
                     refresh_status_text=refresh_status_text,
                 )
@@ -782,8 +802,10 @@ def run_training(args: Args) -> None:
                 time.sleep(min(remaining, max(0.001, frame_dt * 0.5)))
             maybe_update_live_view(
                 iteration=iteration,
-                rollout_step=rollout_step,
-                steps_to_update=steps_to_update,
+                decision_rollout_step=decision_rollout_step,
+                decision_steps_to_update=decision_steps_to_update,
+                tick_rollout_step=tick_rollout_step,
+                tick_rollout_total_steps=tick_rollout_total_steps,
                 env_finished_flags=env_finished_flags,
                 refresh_status_text=refresh_status_text,
             )
@@ -796,60 +818,80 @@ def run_training(args: Args) -> None:
                 optimizer.param_groups[0]["lr"] = frac * float(args.learning_rate)
 
             rollout_start = time.perf_counter()
-            for step in range(args.num_steps):
-                should_decide = (sim_tick_count % decision_interval_ticks) == 0
-                global_step += stream_count
-                obs[step] = next_obs
-                masks[step] = next_mask
-                card_masks[step] = next_card
-                dones[step] = next_done
-                step_trainable = stream_trainable if should_decide else np.zeros_like(stream_trainable)
-                train_mask[step] = torch.as_tensor(step_trainable, dtype=torch.float32, device=device)
+            decision_step = 0
+            tick_step = 0
+            tick_rollout_total_steps = int(args.num_steps) * int(ticks_per_decision)
+            window_open = False
+            tick_in_decision = 0
+            current_decision_actions = np.zeros((stream_count, num_branches), dtype=np.int32)
+            window_reward = np.zeros((stream_count,), dtype=np.float32)
+            window_done = np.zeros((stream_count,), dtype=bool)
+            window_active = np.ones((stream_count,), dtype=bool)
 
-                actions_stream = torch.zeros((stream_count, num_branches), dtype=torch.long, device=device)
-                logprobs_stream = torch.zeros((stream_count,), dtype=torch.float32, device=device)
-                values_stream = torch.zeros((stream_count,), dtype=torch.float32, device=device)
-                regions_stream = torch.zeros((stream_count, region_masks.shape[-1]), dtype=torch.float32, device=device)
-                cells_stream = torch.zeros((stream_count, cell_masks.shape[-1]), dtype=torch.float32, device=device)
+            while decision_step < int(args.num_steps):
+                if not window_open:
+                    global_step += stream_count
+                    obs[decision_step] = next_obs
+                    masks[decision_step] = next_mask
+                    card_masks[decision_step] = next_card
+                    dones[decision_step] = next_done
+                    train_mask[decision_step] = torch.as_tensor(stream_trainable, dtype=torch.float32, device=device)
 
-                for pid in np.unique(stream_policy_id):
-                    idx_np = np.flatnonzero(stream_policy_id == int(pid))
-                    if idx_np.size == 0:
-                        continue
-                    idx_t = torch.as_tensor(idx_np, dtype=torch.long, device=device)
-                    policy = agent if int(pid) == 0 else pool.active_agents.get(int(pid))
-                    if policy is None:
-                        raise RuntimeError(f"Missing active opponent policy id={int(pid)} for ongoing episode")
-                    with torch.no_grad():
-                        act, lp, _ent, val, rm, cm = policy.get_action_and_value(
-                            next_obs[idx_t],
-                            next_mask[idx_t],
-                            next_card[idx_t],
-                            deterministic=bool(pool.opponent_deterministic and int(pid) != 0),
-                        )
-                    actions_stream[idx_t] = act
-                    logprobs_stream[idx_t] = lp
-                    values_stream[idx_t] = val.flatten()
-                    regions_stream[idx_t] = rm
-                    cells_stream[idx_t] = cm
+                    actions_stream = torch.zeros((stream_count, num_branches), dtype=torch.long, device=device)
+                    logprobs_stream = torch.zeros((stream_count,), dtype=torch.float32, device=device)
+                    values_stream = torch.zeros((stream_count,), dtype=torch.float32, device=device)
+                    regions_stream = torch.zeros(
+                        (stream_count, region_masks.shape[-1]), dtype=torch.float32, device=device
+                    )
+                    cells_stream = torch.zeros((stream_count, cell_masks.shape[-1]), dtype=torch.float32, device=device)
 
-                actions[step] = actions_stream
-                logprobs[step] = logprobs_stream
-                values[step] = values_stream
-                region_masks[step] = regions_stream
-                cell_masks[step] = cells_stream
+                    for pid in np.unique(stream_policy_id):
+                        idx_np = np.flatnonzero(stream_policy_id == int(pid))
+                        if idx_np.size == 0:
+                            continue
+                        idx_t = torch.as_tensor(idx_np, dtype=torch.long, device=device)
+                        policy = agent if int(pid) == 0 else pool.active_agents.get(int(pid))
+                        if policy is None:
+                            raise RuntimeError(f"Missing active opponent policy id={int(pid)} for ongoing episode")
+                        with torch.no_grad():
+                            act, lp, _ent, val, rm, cm = policy.get_action_and_value(
+                                next_obs[idx_t],
+                                next_mask[idx_t],
+                                next_card[idx_t],
+                                deterministic=bool(pool.opponent_deterministic and int(pid) != 0),
+                            )
+                        actions_stream[idx_t] = act
+                        logprobs_stream[idx_t] = lp
+                        values_stream[idx_t] = val.flatten()
+                        regions_stream[idx_t] = rm
+                        cells_stream[idx_t] = cm
 
-                action_np = actions_stream.detach().cpu().numpy().astype(np.int32, copy=False)
+                    actions[decision_step] = actions_stream
+                    logprobs[decision_step] = logprobs_stream
+                    values[decision_step] = values_stream
+                    region_masks[decision_step] = regions_stream
+                    cell_masks[decision_step] = cells_stream
+
+                    current_decision_actions = actions_stream.detach().cpu().numpy().astype(np.int32, copy=False)
+                    window_reward.fill(0.0)
+                    window_done.fill(False)
+                    window_active.fill(True)
+                    tick_in_decision = 0
+                    window_open = True
+
                 actions_per_env = np.empty((args.num_envs, agent_count, num_branches), dtype=np.int32)
                 actions_per_env[:] = wait_action
-                if should_decide:
-                    actions_per_env[stream_env, stream_team] = action_np
+                active_idx = np.flatnonzero(window_active)
+                if active_idx.size > 0:
+                    actions_per_env[stream_env[active_idx], stream_team[active_idx]] = current_decision_actions[active_idx]
 
                 pace_before_env_step(
                     sleep_s=tick_delay_s,
                     iteration=iteration,
-                    rollout_step=int(step),
-                    steps_to_update=max(0, int(args.num_steps) - int(step)),
+                    decision_rollout_step=int(decision_step),
+                    decision_steps_to_update=max(0, int(args.num_steps) - int(decision_step)),
+                    tick_rollout_step=int(tick_step),
+                    tick_rollout_total_steps=int(tick_rollout_total_steps),
                     env_finished_flags=last_done_env,
                     refresh_status_text=refresh_status,
                 )
@@ -858,17 +900,20 @@ def run_training(args: Args) -> None:
                     env.step_many_packed(actions_per_env)
                 )
                 env_batch_steps += 1
+                tick_step += 1
+                sim_tick_count += 1
                 current_obs = packed_obs
                 current_mask = packed_mask
                 current_card = packed_card
 
                 done_env = np.logical_or(packed_done, packed_trunc)
                 last_done_env = done_env
-                sim_tick_count += 1
-                rewards[step] = torch.as_tensor(
-                    packed_reward[stream_env, stream_team], dtype=torch.float32, device=device
-                )
-                next_done = torch.as_tensor(done_env[stream_env].astype(np.float32), dtype=torch.float32, device=device)
+                tick_rewards = packed_reward[stream_env, stream_team]
+                window_reward += tick_rewards * window_active.astype(np.float32)
+                done_stream = done_env[stream_env]
+                window_done = np.logical_or(window_done, done_stream)
+                window_active = np.logical_and(window_active, ~done_stream)
+                tick_in_decision += 1
 
                 done_ids = np.flatnonzero(done_env)
                 if bool(args.benchmark_enabled) and done_ids.size > 0:
@@ -909,15 +954,24 @@ def run_training(args: Args) -> None:
                             raise RuntimeError(f"reset did not return observation for env {env_i}")
                         write_reset(env_i, obs_entry)
 
+                next_obs, next_mask, next_card = stream_tensors()
                 maybe_update_live_view(
                     iteration=iteration,
-                    rollout_step=int(step + 1),
-                    steps_to_update=max(0, int(args.num_steps) - int(step + 1)),
+                    decision_rollout_step=int(decision_step + (1 if window_open else 0)),
+                    decision_steps_to_update=max(0, int(args.num_steps) - int(decision_step + (1 if window_open else 0))),
+                    tick_rollout_step=int(tick_step),
+                    tick_rollout_total_steps=int(tick_rollout_total_steps),
                     env_finished_flags=done_env,
                     refresh_status_text=refresh_status,
                 )
 
-                next_obs, next_mask, next_card = stream_tensors()
+                should_finalize = (tick_in_decision >= int(ticks_per_decision)) or (not np.any(window_active))
+                if should_finalize:
+                    rewards[decision_step] = torch.as_tensor(window_reward, dtype=torch.float32, device=device)
+                    next_done = torch.as_tensor(window_done.astype(np.float32), dtype=torch.float32, device=device)
+                    decision_step += 1
+                    window_open = False
+                    tick_in_decision = 0
             rollout_s = time.perf_counter() - rollout_start
 
             update_start = time.perf_counter()
@@ -1069,6 +1123,7 @@ def run_training(args: Args) -> None:
                     f"active_pool(r/a)={len(pool.active_recent_ids)}/{len(pool.active_anchor_ids)}"
                 )
                 writer.add_scalar("charts/samples_per_second", sample_sps, global_step)
+                writer.add_scalar("charts/decision_steps_per_second", sample_sps, global_step)
                 writer.add_scalar("charts/env_steps_per_second", env_step_sps, global_step)
                 writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
                 writer.add_scalar("timing/iteration_seconds", iter_s, global_step)
@@ -1122,7 +1177,7 @@ def run_training(args: Args) -> None:
             "batch_size": int(batch_size),
             "pool_enabled": bool(args.pool_enabled),
             "sim_speed_mode": str(sim_speed_mode),
-            "decision_interval_ticks": int(decision_interval_ticks),
+            "ticks_per_decision": int(ticks_per_decision),
             "tick_delay_seconds": float(tick_delay_s),
             "active_recent": int(len(pool.active_recent_ids)),
             "active_anchor": int(len(pool.active_anchor_ids)),

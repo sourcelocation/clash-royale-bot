@@ -114,7 +114,8 @@ void ClashEnv::process_queue_tick() {
                     s.x = p.x;
                     s.y = p.y;
                     s.time_left_s = 2.0;
-                    s.dir_y = (p.team == 0) ? 1.0 : -1.0;
+                    // Log direction is defined by caster team forward axis.
+                    s.dir_y = (p.team == 0) ? -1.0 : 1.0;
                     logs_.push_back(s);
                 }
                 remove_indices.push_back(i);

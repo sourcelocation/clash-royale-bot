@@ -14,7 +14,7 @@ class Args:
     total_timesteps: int = 1_000_000
     learning_rate: float = 2.5e-4
     num_envs: int = 32
-    num_steps: int = 64
+    num_steps: int = 48
     num_minibatches: int = 8
     update_epochs: int = 4
     anneal_lr: bool = True
@@ -30,6 +30,7 @@ class Args:
 
     hidden_sizes: str = "256,256"
     cpp_tick_hz: int = 10
+    ticks_per_decision: int = 5
     cpp_max_sim_seconds: float = 120.0
     cpp_num_threads: int = 0
     run_dir: str = "training/logs/custom/minimal"
@@ -48,9 +49,9 @@ class Args:
     pool_promote_every: int = 20
     pool_refresh_every: int = 128
     pool_anchor_every: int = 4
-    pool_latest_latest_prob: float = 0.75
-    pool_latest_recent_prob: float = 0.2
-    pool_latest_anchor_prob: float = 0.05
+    pool_latest_latest_prob: float = 0.4
+    pool_latest_recent_prob: float = 0.5
+    pool_latest_anchor_prob: float = 0.1
     pool_deterministic: bool = True
 
     benchmark_enabled: bool = True

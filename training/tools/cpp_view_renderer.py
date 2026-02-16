@@ -332,6 +332,7 @@ class ArenaRenderer:
             sx = float(s.get("x", 0.0))
             sy = float(s.get("y", 0.0))
             team = int(s.get("team", 0))
+            dir_y = float(s.get("dir_y", 0.0))
             half_len = 0.5 * LOG_LENGTH_TILES
             ax = sx - half_len
             bx = sx + half_len
@@ -356,6 +357,10 @@ class ArenaRenderer:
                 edge = (220, 155, 120, 190)
             self.pygame.draw.rect(overlay, fill, self.pygame.Rect(left, top, rect_w, rect_h))
             self.pygame.draw.rect(overlay, edge, self.pygame.Rect(left, top, rect_w, rect_h), 2)
+            cx = (left + right) // 2
+            cy = (top + bottom) // 2
+            dy_px = int(max(6, half_w_px * 2) * (1.0 if dir_y >= 0.0 else -1.0))
+            self.pygame.draw.line(overlay, edge, (cx, cy), (cx, cy - dy_px), 2)
 
         self.screen.blit(overlay, (vx, vy))
 
@@ -363,9 +368,12 @@ class ArenaRenderer:
         cells = list(grid.get("cells", []))
         if not cells:
             return
+        max_cells = 256
+        hidden_cells = max(0, len(cells) - max_cells)
+        shown_cells = cells[:max_cells]
         dim_mask = [bool(x) for x in list(grid.get("dim_mask", []))]
         cols = max(1, int(grid.get("cols", 1)))
-        rows = (len(cells) + cols - 1) // cols
+        rows = (len(shown_cells) + cols - 1) // cols
         cell_size = max(8, int(grid.get("cell_size", 12)))
         gap = max(2, int(grid.get("gap", 2)))
         title = str(grid.get("title", ""))
@@ -382,9 +390,9 @@ class ArenaRenderer:
         for row in range(rows):
             for col in range(cols):
                 idx = row * cols + col
-                if idx >= len(cells):
+                if idx >= len(shown_cells):
                     break
-                code = int(cells[idx])
+                code = int(shown_cells[idx])
                 color = palette.get(code, (120, 120, 120))
                 if idx < len(dim_mask) and dim_mask[idx]:
                     color = _dim_color(color)
@@ -393,6 +401,10 @@ class ArenaRenderer:
                 self.pygame.draw.rect(self.screen, color, self.pygame.Rect(rx, ry, cell_size, cell_size))
                 self.pygame.draw.rect(self.screen, (30, 34, 42), self.pygame.Rect(rx, ry, cell_size, cell_size), 1)
         y += rows * (cell_size + gap) + 8
+        if hidden_cells > 0:
+            surf = self.label_font.render(f"and {hidden_cells} more...", True, (200, 205, 214))
+            self.screen.blit(surf, (x0, y))
+            y += 16
 
         for item in legend:
             if not isinstance(item, dict):

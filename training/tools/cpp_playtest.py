@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--run-dir", type=str, default="training/logs/custom/minimal", help="Checkpoint run root.")
     parser.add_argument("--tick-hz", type=int, default=10, help="Simulation tick rate.")
     parser.add_argument("--fps", type=int, default=60, help="Render FPS cap.")
+    parser.add_argument(
+        "--ticks-per-decision",
+        type=int,
+        default=1,
+        help="How many sim ticks between action decisions (default 1 for responsive playtesting).",
+    )
     parser.add_argument("--seed", type=int, default=1, help="Initial seed.")
     parser.add_argument(
         "--max-sim-seconds",
@@ -63,7 +70,7 @@ def _parse_args() -> argparse.Namespace:
         default=86400.0,
         help="Match time cap in seconds. Use a large value for near-unlimited time.",
     )
-    parser.add_argument("--turbo-multiplier", type=int, default=8, help="Ticks per frame while holding T.")
+    parser.add_argument("--turbo-multiplier", type=int, default=3, help="Ticks per frame while holding T.")
     parser.add_argument("--device", type=str, default="auto", choices=("auto", "cpu", "cuda", "mps"))
     parser.add_argument("--human-team", type=int, default=1, choices=(0, 1))
     parser.add_argument("--stochastic-bot", action="store_true", help="Sample bot actions instead of greedy.")
@@ -159,6 +166,7 @@ class PlaytestApp:
         self.human_team = int(args.human_team)
         self.bot_team = 1 - self.human_team
         self.cheat_enabled = bool(args.cheat_infinite_elixir)
+        self.ticks_per_decision = max(1, int(args.ticks_per_decision))
         self.pending_action: np.ndarray | None = None
         self.selected_slot = 0
         self.selection_index = 0
@@ -373,7 +381,7 @@ class PlaytestApp:
         for _ in range(max(0, int(count))):
             if self.match_done:
                 return
-            should_decide = (self.sim_tick % max(1, int(self.args.tick_hz))) == 0
+            should_decide = (self.sim_tick % self.ticks_per_decision) == 0
             human_action = self.wait_action.copy()
             bot_action = self.wait_action.copy()
             if should_decide:
@@ -514,7 +522,13 @@ class PlaytestApp:
 
         running = True
         self._hud_bounds = (0, 0, 1, 1)
+        tick_accum = 0.0
+        last_wall = time.perf_counter()
+        max_ticks_per_frame = max(1, int(self.args.tick_hz) * max(1, int(self.args.turbo_multiplier)))
         while running and not self.renderer.closed:
+            now = time.perf_counter()
+            dt_wall = max(0.0, now - last_wall)
+            last_wall = now
             events = self.renderer.poll_events(esc_quit=False)
             if events.get("quit") or events.get("esc"):
                 break
@@ -542,8 +556,13 @@ class PlaytestApp:
                 self._handle_click(int(mx), int(my))
 
             turbo = bool(self.renderer.pygame.key.get_pressed()[self.renderer.pygame.K_t])
-            steps = int(self.args.turbo_multiplier) if turbo else 1
-            self._run_sim_steps(steps)
+            speed_mul = int(self.args.turbo_multiplier) if turbo else 1
+            tick_accum += dt_wall * float(max(1, int(self.args.tick_hz)) * max(1, speed_mul))
+            ticks_to_run = int(tick_accum)
+            if ticks_to_run > 0:
+                ticks_to_run = min(ticks_to_run, max_ticks_per_frame)
+                self._run_sim_steps(ticks_to_run)
+                tick_accum = max(0.0, tick_accum - float(ticks_to_run))
 
             hud_rows = self._build_hud()
             hud_lines = [line for line, _ in hud_rows]

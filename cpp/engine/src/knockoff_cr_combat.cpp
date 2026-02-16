@@ -482,20 +482,25 @@ void ClashEnv::update_stationary_attacker(Entity& e) {
 void ClashEnv::update_troop(Entity& e) {
     tick_attack_timers(e, dt_, [&]() { resolve_attack_hit(e); });
     const double sense_r2 = kSenseRadiusTiles * kSenseRadiusTiles;
-    Entity* lock = refresh_lock(
-        e,
-        find_entity(e.lock_target_id),
-        [&](const Entity& target) { return can_target(e, target); },
-        [&](const Entity& target) {
-            return !target_in_attack_range(e, target) && dist2(e.x, e.y, target.x, target.y) > sense_r2;
-        },
-        [&]() {
-            Entity* nearest = nearest_target_within(e, kSenseRadiusTiles);
-            if (nearest) {
-                return nearest;
-            }
-            return nearest_princess_tower(e, 1 - e.team);
-        });
+    const bool attack_locked = (e.attack_windup_rem > 1e-9 || e.attack_recover_rem > 1e-9);
+    Entity* lock = find_entity(e.lock_target_id);
+    auto acquire_nearest = [&]() {
+        Entity* nearest = nearest_target_within(e, kSenseRadiusTiles);
+        if (nearest) {
+            return nearest;
+        }
+        return nearest_princess_tower(e, 1 - e.team);
+    };
+
+    if (attack_locked) {
+        if (!lock || !can_target(e, *lock)) {
+            lock = acquire_nearest();
+        }
+    } else {
+        // While approaching, always re-evaluate and pick the closest valid target.
+        lock = acquire_nearest();
+    }
+    e.lock_target_id = lock ? lock->id : -1;
     if (lock) {
         begin_attack_if_possible(e, *lock);
     }

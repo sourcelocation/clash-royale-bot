@@ -80,7 +80,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ticks-per-decision",
         type=int,
-        default=1,
+        default=2,
         help="How many sim ticks between action decisions (default 1 for responsive playtesting).",
     )
     parser.add_argument("--seed", type=int, default=1, help="Initial seed.")
@@ -240,7 +240,7 @@ class PlaytestApp:
         if not self.checkpoints:
             raise FileNotFoundError(f"No checkpoint files found under {args.run_dir}")
 
-        self.renderer = ArenaRenderer(title="CR PPO Playtest", width=1280, height=760, headless=False)
+        self.renderer = ArenaRenderer(title="CR PPO Playtest", width=1280, height=1600, headless=False)
         self.current_obs = np.zeros((2, int(self.spec["obs_schema"]["vector_size"])), dtype=np.float32)
         self.current_mask = np.zeros((2, int(self.spec["action_mask_size"])), dtype=np.float32)
         self.current_card_masks = np.zeros((2, self.card_count, self.position_count), dtype=np.float32)

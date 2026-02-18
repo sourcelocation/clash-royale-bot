@@ -5,7 +5,7 @@ import numpy as np
 
 from .cpp_env import CppClashEnv
 
-EXPECTED_SCHEMA_VERSION = "knockoff_cr_env_v2"
+EXPECTED_SCHEMA_VERSION = "knockoff_cr_env_v3"
 
 def assert_finite_array(name: str, arr: np.ndarray) -> None:
     if not np.all(np.isfinite(arr)):

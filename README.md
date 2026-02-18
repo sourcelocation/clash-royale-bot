@@ -2,8 +2,7 @@
 
 An experiment to see how well can RL algorithms can learn how to play a simplified version of Clash Royale. 
 
-This repository pairs a Godot 4 front-end with a PPO training loop that runs against a native C++ simulation (`cpp`) and the Python training stack
-(`training`).
+This repository pairs a Godot 4 front-end with a PPO training loop that runs against a native C++ simulation (`cpp`) and the Python training stack (`training`). `godot/` is currently unused.
 
 <p align="center">
   <img src="assets/game-godot.png" width="49%" />

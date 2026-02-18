@@ -359,6 +359,81 @@ std::vector<float> ClashEnv::build_obs_vector(int for_team) const {
     };
     append_team_entities(team_a);
     append_team_entities(team_b);
+
+    // Defensive threat summary features (team-relative, normalized to [0, 1]).
+    std::vector<const Entity*> self_towers;
+    self_towers.reserve(3);
+    for (const auto& e : entities_) {
+        if (!is_alive(e)) {
+            continue;
+        }
+        if (e.team == team_self && e.kind == ENTITY_TOWER) {
+            self_towers.push_back(&e);
+        }
+    }
+
+    double nearest_enemy_to_tower = 1e9;
+    double nearest_hog_to_tower = 1e9;
+    int enemy_units_self_side = 0;
+    int enemy_building_targeters_self_side = 0;
+    int enemy_near_tower = 0;
+    int self_defensive_buildings = 0;
+
+    for (const auto& e : entities_) {
+        if (!is_alive(e)) {
+            continue;
+        }
+
+        const double y_rel = should_flip ? -e.y : e.y;
+        if (e.team == team_self) {
+            if (e.kind == ENTITY_BUILDING && y_rel > 0.0) {
+                ++self_defensive_buildings;
+            }
+            continue;
+        }
+
+        if (e.kind == ENTITY_TOWER) {
+            continue;
+        }
+
+        if (y_rel > 0.0) {
+            ++enemy_units_self_side;
+            if (e.target_type == TARGET_BUILDINGS) {
+                ++enemy_building_targeters_self_side;
+            }
+        }
+
+        if (self_towers.empty()) {
+            continue;
+        }
+
+        double nearest = 1e9;
+        for (const Entity* tower : self_towers) {
+            nearest = std::min(nearest, std::sqrt(dist2(e.x, e.y, tower->x, tower->y)));
+        }
+        nearest_enemy_to_tower = std::min(nearest_enemy_to_tower, nearest);
+        if (nearest <= 7.0) {
+            ++enemy_near_tower;
+        }
+        if (e.card_id == kCardHog) {
+            nearest_hog_to_tower = std::min(nearest_hog_to_tower, nearest);
+        }
+    }
+
+    constexpr double kThreatDistanceCap = 12.0;
+    auto norm_distance = [&](double d) -> float {
+        if (!(d < 1e8)) {
+            return 1.0f;
+        }
+        return static_cast<float>(clampd(d / kThreatDistanceCap, 0.0, 1.0));
+    };
+    res.push_back(norm_distance(nearest_enemy_to_tower));
+    res.push_back(norm_distance(nearest_hog_to_tower));
+    res.push_back(static_cast<float>(clampd(static_cast<double>(enemy_units_self_side) / 10.0, 0.0, 1.0)));
+    res.push_back(static_cast<float>(clampd(static_cast<double>(enemy_building_targeters_self_side) / 6.0, 0.0, 1.0)));
+    res.push_back(static_cast<float>(clampd(static_cast<double>(enemy_near_tower) / 8.0, 0.0, 1.0)));
+    res.push_back(static_cast<float>(clampd(static_cast<double>(self_defensive_buildings) / 3.0, 0.0, 1.0)));
+
     for (auto& v : res) {
         if (!is_finite(v)) {
             v = 0.0f;

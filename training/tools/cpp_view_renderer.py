@@ -101,8 +101,8 @@ class ArenaRenderer:
         self,
         *,
         title: str,
-        width: int = 1080,
-        height: int = 960,
+        width: int = 1400,
+        height: int = 1900,
         headless: bool = False,
     ) -> None:
         if headless:

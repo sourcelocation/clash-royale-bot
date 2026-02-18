@@ -11,7 +11,7 @@ from gymnasium import spaces
 class CppClashEnvBatch:
     EXPECTED_PROTOCOL_VERSION = "knockoff_env_v1"
     EXPECTED_OBS_VERSION = "v1"
-    EXPECTED_SCHEMA_VERSION = "knockoff_cr_env_v2"
+    EXPECTED_SCHEMA_VERSION = "knockoff_cr_env_v3"
 
     def __init__(
         self,

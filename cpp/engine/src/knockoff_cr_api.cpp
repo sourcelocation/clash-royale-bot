@@ -69,7 +69,7 @@ py::dict ClashEnv::spec() {
     py::dict out;
     out["protocol_version"] = "knockoff_env_v1";
     out["obs_version"] = "v1";
-    out["schema_version"] = "knockoff_cr_env_v2";
+    out["schema_version"] = "knockoff_cr_env_v3";
     out["n_agents"] = kAgentCount;
     out["action_space"] = action_space;
     out["action_order"] = action_order;

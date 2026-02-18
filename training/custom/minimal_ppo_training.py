@@ -6,6 +6,7 @@ import json
 import math
 import random
 import time
+from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,11 @@ def _format_compact_number(value: int | float, *, decimals: int = 2) -> str:
     return f"{sign}{scaled:.{decimals}f}{unit}"
 
 
+def _lerp(start: float, end: float, alpha: float) -> float:
+    t = min(1.0, max(0.0, float(alpha)))
+    return float(start) + (float(end) - float(start)) * t
+
+
 class _TrainingVisualizer:
     def __init__(self, fps: int):
         from training.tools.cpp_view_renderer import ArenaRenderer, kv
@@ -122,7 +128,7 @@ class _TrainingVisualizer:
         self.fps = max(1, int(fps))
         self.env_index = 0
         self._kv = kv
-        self.renderer = ArenaRenderer(title="minimal ppo live view", width=1100, height=620, headless=False)
+        self.renderer = ArenaRenderer(title="Clash Royale Training", width=1200, height=1200, headless=False)
         self.collapsed = False
         self._speed_cycle_requested = False
 
@@ -187,6 +193,7 @@ class _TrainingVisualizer:
         env_steps_per_second = float(metrics.get("env_steps_per_second", 0.0))
         decision_steps_per_second = float(metrics.get("decision_steps_per_second", 0.0))
         benchmark_current = float(metrics.get("benchmark_current", 0.0))
+        true_elo_current = metrics.get("true_elo_current", None)
         benchmark_games = int(metrics.get("benchmark_games", 0))
         benchmark_win_rate = float(metrics.get("benchmark_win_rate", 0.0))
         sim_speed_label = str(metrics.get("sim_speed_label", "max"))
@@ -235,6 +242,7 @@ class _TrainingVisualizer:
                 "",
                 "[BENCHMARK]",
                 self._kv("Rating", f"{benchmark_current:.1f}"),
+                self._kv("True Elo", f"{float(true_elo_current):.1f}" if true_elo_current is not None else "-"),
                 self._kv("Games", benchmark_games_label),
                 self._kv("Win Rate", f"{100.0 * benchmark_win_rate:.1f}%"),
             ]
@@ -258,8 +266,10 @@ class _TrainingVisualizer:
             [
                 "",
                 "[CONTROLS]",
-                "Esc: Expand view  Left/Right: Switch env" if self.collapsed else "Esc: Collapse preview  Left/Right: Switch env",
-                "T: Toggle throttle  Close window: disable viewer",
+                "Esc: Expand view" if self.collapsed else "Esc: Collapse preview",
+                "Left/Right: Switch env",
+                "T: Toggle throttle",
+                "Close window: disable viewer",
             ]
         )
         return lines
@@ -345,8 +355,8 @@ class _GpuOpponentPool:
         self.anchor_capacity = max(0, int(args.pool_anchor_capacity))
         self.active_recent_size = max(0, int(args.pool_active_recent_size))
         self.active_anchor_size = max(0, int(args.pool_active_anchor_size))
-        self.promote_count = max(1, int(args.pool_promote_count))
-        self.refresh_count = max(1, int(args.pool_refresh_count))
+        self.promote_every = max(1, int(args.pool_promote_every))
+        self.refresh_every_env_decisions = max(1, int(args.pool_refresh_every_env_decisions))
         self.anchor_every = max(1, int(args.pool_anchor_every))
         self.latest_latest_prob = max(0.0, float(args.pool_latest_latest_prob))
         self.latest_recent_prob = max(0.0, float(args.pool_latest_recent_prob))
@@ -362,6 +372,7 @@ class _GpuOpponentPool:
         self.active_recent_ids: list[int] = []
         self.active_anchor_ids: list[int] = []
         self._next_policy_id = 1
+        self._next_refresh_env_decisions = self.refresh_every_env_decisions
 
     def _clone_state(self, agent: MaskedPPOAgent) -> dict[str, torch.Tensor]:
         return {k: v.detach().cpu().clone() for k, v in agent.state_dict().items()}
@@ -421,13 +432,17 @@ class _GpuOpponentPool:
                 self.active_policy_kind[pid] = "anchor"
                 self.active_anchor_ids.append(pid)
 
-    def should_refresh(self, iteration: int, *, num_iterations: int) -> bool:
-        refresh_every = max(1, int(num_iterations) // self.refresh_count)
-        return self.enabled and (iteration % refresh_every == 0)
+    def should_refresh(self, env_decisions_completed: int) -> bool:
+        if not self.enabled:
+            return False
+        if int(env_decisions_completed) < int(self._next_refresh_env_decisions):
+            return False
+        while int(env_decisions_completed) >= int(self._next_refresh_env_decisions):
+            self._next_refresh_env_decisions += self.refresh_every_env_decisions
+        return True
 
-    def should_promote(self, iteration: int, *, num_iterations: int) -> bool:
-        promote_every = max(1, int(num_iterations) // self.promote_count)
-        return self.enabled and (iteration % promote_every == 0)
+    def should_promote(self, iteration: int) -> bool:
+        return self.enabled and (iteration % self.promote_every == 0)
 
     def choose_match(self) -> tuple[str, int | None]:
         if not self.enabled:
@@ -520,6 +535,281 @@ class _BenchmarkTracker:
         return float(self.total_wins) / float(self.total_games)
 
 
+@dataclass(frozen=True)
+class _TrueEloLadderEntry:
+    step: int
+    rating: float
+    checkpoint_path: str
+
+
+@dataclass(frozen=True)
+class _TrueEloJob:
+    candidate_checkpoint_path: str
+    candidate_step: int
+    seed: int
+    num_envs: int
+    games_per_opponent: int
+    tick_hz: int
+    max_sim_seconds: float
+    ticks_per_decision: int
+    num_threads: int
+    deterministic: bool
+    policy_cfg: MaskedPolicyConfig
+    ladder_entries: tuple[_TrueEloLadderEntry, ...]
+
+
+@dataclass(frozen=True)
+class _TrueEloResult:
+    candidate_checkpoint_path: str
+    candidate_step: int
+    elo: float
+    games: int
+    win_rate: float
+    draw_rate: float
+
+
+def _estimate_fixed_elo_mle(samples: list[tuple[float, float]], *, fallback: float = 1000.0) -> float:
+    if not samples:
+        return float(fallback)
+
+    def f(rating: float) -> float:
+        total = 0.0
+        for opp_rating, score in samples:
+            expected = 1.0 / (1.0 + 10.0 ** ((float(opp_rating) - float(rating)) / 400.0))
+            total += float(score) - expected
+        return total
+
+    lo = 0.0
+    hi = 3000.0
+    f_lo = f(lo)
+    f_hi = f(hi)
+    if f_lo >= 0.0 and f_hi >= 0.0:
+        return hi
+    if f_lo <= 0.0 and f_hi <= 0.0:
+        return lo
+
+    for _ in range(64):
+        mid = 0.5 * (lo + hi)
+        f_mid = f(mid)
+        if abs(f_mid) <= 1e-9:
+            return mid
+        if f_mid > 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def _load_model_state(path: str) -> dict[str, torch.Tensor]:
+    blob = torch.load(path, map_location="cpu")
+    if isinstance(blob, dict) and "model_state_dict" in blob:
+        raw = blob["model_state_dict"]
+        if isinstance(raw, dict):
+            return raw
+    if isinstance(blob, dict):
+        return blob
+    raise ValueError(f"Unsupported checkpoint payload at {path}")
+
+
+def _run_true_elo_job(job: _TrueEloJob) -> _TrueEloResult:
+    if not job.ladder_entries:
+        return _TrueEloResult(
+            candidate_checkpoint_path=job.candidate_checkpoint_path,
+            candidate_step=int(job.candidate_step),
+            elo=1000.0,
+            games=0,
+            win_rate=0.0,
+            draw_rate=0.0,
+        )
+
+    eval_envs = max(1, int(job.num_envs))
+    env = CppClashEnvBatch(
+        num_envs=eval_envs,
+        tick_hz=max(1, int(job.tick_hz)),
+        max_sim_seconds=float(job.max_sim_seconds),
+        seed=int(job.seed),
+        num_threads=max(0, int(job.num_threads)),
+    )
+    try:
+        device = torch.device("cpu")
+        candidate = MaskedPPOAgent(job.policy_cfg).to(device)
+        candidate.load_state_dict(_load_model_state(job.candidate_checkpoint_path))
+        candidate.eval()
+
+        action_order = list(env.action_order)
+        agent_count = len(env.agent_keys)
+        if agent_count != 2:
+            raise ValueError(f"True ELO evaluator expects 2 agents, got {agent_count}")
+        branch_sizes = branch_sizes_from_action_space(env.action_space["agent_0"].spaces, action_order)
+        num_branches = len(branch_sizes)
+        card_branch_idx = action_order.index("card_selection")
+        card_branch_offset = int(sum(branch_sizes[:card_branch_idx]))
+        cards_count = int(branch_sizes[card_branch_idx])
+        placement_runtime = parse_placement_runtime(env.spec_data)
+        position_count = int(placement_runtime.position_count)
+        if cards_count <= 0 or position_count <= 0:
+            raise ValueError(f"Invalid evaluator card mask dims cards={cards_count} positions={position_count}")
+
+        static_templates = _build_static_card_position_templates(
+            agent_count=agent_count,
+            cards_count=cards_count,
+            grid_width=int(placement_runtime.config.grid_width),
+            grid_height=int(placement_runtime.config.grid_height),
+        )
+        static_templates_t = torch.as_tensor(static_templates, dtype=torch.float32, device=device)
+
+        wait_idx = action_order.index("wait")
+        wait_action = np.zeros((num_branches,), dtype=np.int32)
+        wait_action[wait_idx] = 1
+        stream_env = np.repeat(np.arange(eval_envs, dtype=np.int64), agent_count)
+        stream_team = np.tile(np.arange(agent_count, dtype=np.int64), eval_envs)
+        stream_team_t = torch.as_tensor(stream_team, dtype=torch.long, device=device)
+        stream_count = int(stream_env.shape[0])
+        rng = np.random.default_rng(int(job.seed) + 424242)
+
+        fixed_samples: list[tuple[float, float]] = []
+        total_wins = 0
+        total_draws = 0
+        total_games = 0
+
+        for entry in job.ladder_entries:
+            opponent = MaskedPPOAgent(job.policy_cfg).to(device)
+            opponent.load_state_dict(_load_model_state(entry.checkpoint_path))
+            opponent.eval()
+
+            current_obs = np.zeros((eval_envs, agent_count, job.policy_cfg.obs_dim), dtype=np.float32)
+            current_mask = np.zeros(
+                (eval_envs, agent_count, int(sum(job.policy_cfg.action_branch_sizes))),
+                dtype=np.float32,
+            )
+
+            def write_reset(env_idx: int, obs_entry: dict[str, dict[str, np.ndarray]]) -> None:
+                for team_idx in range(agent_count):
+                    key = f"agent_{team_idx}"
+                    current_obs[env_idx, team_idx] = np.asarray(obs_entry[key]["vector"], dtype=np.float32)
+                    current_mask[env_idx, team_idx] = np.asarray(obs_entry[key]["action_mask"], dtype=np.float32)
+
+            reset_options = [
+                {"team_controllers": ["external", "external"], "training_mode": True, "ticks_per_step": 1}
+                for _ in range(eval_envs)
+            ]
+            reset_obs, _ = env.reset_many(
+                seeds=[int(job.seed) + i for i in range(eval_envs)],
+                options_per_env=reset_options,
+            )
+            for env_idx, obs_entry in enumerate(reset_obs):
+                if obs_entry is None:
+                    raise RuntimeError(f"true_elo reset returned empty observation for env {env_idx}")
+                write_reset(env_idx, obs_entry)
+
+            env_latest_team = rng.integers(0, 2, size=(eval_envs,), dtype=np.int32)
+            games_done = 0
+            while games_done < int(job.games_per_opponent):
+                stream_obs = torch.as_tensor(current_obs[stream_env, stream_team], dtype=torch.float32, device=device)
+                stream_mask = torch.as_tensor(current_mask[stream_env, stream_team], dtype=torch.float32, device=device)
+                per_stream_templates = static_templates_t.index_select(0, stream_team_t)
+                card_playable = (
+                    stream_mask[:, card_branch_offset : card_branch_offset + cards_count] > 0.5
+                ).to(dtype=torch.float32)
+                stream_card = per_stream_templates * card_playable.unsqueeze(-1)
+
+                latest_stream = env_latest_team[stream_env] == stream_team
+                latest_idx_np = np.flatnonzero(latest_stream)
+                opp_idx_np = np.flatnonzero(~latest_stream)
+                actions_stream = np.zeros((stream_count, num_branches), dtype=np.int32)
+                if latest_idx_np.size > 0:
+                    latest_idx_t = torch.as_tensor(latest_idx_np, dtype=torch.long, device=device)
+                    with torch.no_grad():
+                        act, _lp, _ent, _val, _rm, _cm = candidate.get_action_and_value(
+                            stream_obs[latest_idx_t],
+                            stream_mask[latest_idx_t],
+                            stream_card[latest_idx_t],
+                            deterministic=bool(job.deterministic),
+                        )
+                    actions_stream[latest_idx_np] = act.detach().cpu().numpy().astype(np.int32, copy=False)
+                if opp_idx_np.size > 0:
+                    opp_idx_t = torch.as_tensor(opp_idx_np, dtype=torch.long, device=device)
+                    with torch.no_grad():
+                        act, _lp, _ent, _val, _rm, _cm = opponent.get_action_and_value(
+                            stream_obs[opp_idx_t],
+                            stream_mask[opp_idx_t],
+                            stream_card[opp_idx_t],
+                            deterministic=bool(job.deterministic),
+                        )
+                    actions_stream[opp_idx_np] = act.detach().cpu().numpy().astype(np.int32, copy=False)
+
+                for tick_in_decision in range(max(1, int(job.ticks_per_decision))):
+                    actions_per_env = np.empty((eval_envs, agent_count, num_branches), dtype=np.int32)
+                    actions_per_env[:] = wait_action
+                    if tick_in_decision == 0:
+                        actions_per_env[stream_env, stream_team] = actions_stream
+
+                    packed_obs, packed_mask, _pc, packed_reward, packed_done, packed_trunc, packed_winner, _rt = (
+                        env.step_many_packed(actions_per_env)
+                    )
+                    current_obs = packed_obs
+                    current_mask = packed_mask
+                    done_env = np.logical_or(packed_done, packed_trunc)
+                    done_ids = np.flatnonzero(done_env)
+                    if done_ids.size > 0:
+                        options: list[dict | None] = [None for _ in range(eval_envs)]
+                        for env_idx in done_ids:
+                            env_i = int(env_idx)
+                            if games_done < int(job.games_per_opponent):
+                                latest_team = int(env_latest_team[env_i])
+                                winner = int(packed_winner[env_i])
+                                if winner < 0:
+                                    score_latest = 0.5
+                                    total_draws += 1
+                                elif winner == latest_team:
+                                    score_latest = 1.0
+                                    total_wins += 1
+                                else:
+                                    score_latest = 0.0
+                                fixed_samples.append((float(entry.rating), float(score_latest)))
+                                total_games += 1
+                                games_done += 1
+                            options[env_i] = {
+                                "team_controllers": ["external", "external"],
+                                "training_mode": True,
+                                "ticks_per_step": 1,
+                            }
+                            env_latest_team[env_i] = int(rng.integers(0, 2))
+
+                        if games_done < int(job.games_per_opponent):
+                            reset_obs_done, _ = env.reset_many(
+                                seeds=[None for _ in range(eval_envs)],
+                                options_per_env=options,
+                            )
+                            for env_idx in done_ids:
+                                obs_entry = reset_obs_done[int(env_idx)]
+                                if obs_entry is None:
+                                    raise RuntimeError(
+                                        f"true_elo reset did not return observation for env {int(env_idx)}"
+                                    )
+                                write_reset(int(env_idx), obs_entry)
+                        break
+
+                    if games_done >= int(job.games_per_opponent):
+                        break
+
+            del opponent
+
+        elo = _estimate_fixed_elo_mle(fixed_samples, fallback=1000.0)
+        win_rate = (float(total_wins) / float(max(1, total_games))) if total_games > 0 else 0.0
+        draw_rate = (float(total_draws) / float(max(1, total_games))) if total_games > 0 else 0.0
+        return _TrueEloResult(
+            candidate_checkpoint_path=job.candidate_checkpoint_path,
+            candidate_step=int(job.candidate_step),
+            elo=float(elo),
+            games=int(total_games),
+            win_rate=float(win_rate),
+            draw_rate=float(draw_rate),
+        )
+    finally:
+        env.close()
+
+
 def run_training(args: Args) -> None:
     if args.num_envs <= 0 or args.num_steps <= 0 or args.num_minibatches <= 0 or args.ticks_per_decision <= 0:
         raise ValueError("num_envs/num_steps/num_minibatches/ticks_per_decision must be > 0")
@@ -554,6 +844,9 @@ def run_training(args: Args) -> None:
     live_view: _TrainingVisualizer | None = None
     live_view_failed = False
     next_view_update_at = 0.0
+    true_elo_executor: ProcessPoolExecutor | None = None
+    true_elo_future: Future[_TrueEloResult] | None = None
+    true_elo_queued_job: _TrueEloJob | None = None
     try:
         if bool(args.visualize):
             try:
@@ -652,9 +945,26 @@ def run_training(args: Args) -> None:
         stream_index = np.arange(stream_count, dtype=np.int64).reshape(args.num_envs, agent_count)
 
         wait_idx = action_order.index("wait") if "wait" in action_order else None
+        card_idx = action_order.index("card_selection") if "card_selection" in action_order else None
+        region_idx = action_order.index("position_region") if "position_region" in action_order else None
+        cell_idx = action_order.index("position_cell") if "position_cell" in action_order else None
         wait_action = np.zeros((num_branches,), dtype=np.int32)
         if wait_idx is not None:
             wait_action[wait_idx] = 1
+        entropy_scale_start = torch.ones((num_branches,), dtype=torch.float32, device=device)
+        entropy_scale_end = torch.ones((num_branches,), dtype=torch.float32, device=device)
+        if wait_idx is not None:
+            entropy_scale_start[wait_idx] = float(args.ent_wait_scale)
+            entropy_scale_end[wait_idx] = float(args.ent_wait_scale_end)
+        if card_idx is not None:
+            entropy_scale_start[card_idx] = float(args.ent_card_scale)
+            entropy_scale_end[card_idx] = float(args.ent_card_scale_end)
+        if region_idx is not None:
+            entropy_scale_start[region_idx] = float(args.ent_region_scale)
+            entropy_scale_end[region_idx] = float(args.ent_region_scale_end)
+        if cell_idx is not None:
+            entropy_scale_start[cell_idx] = float(args.ent_cell_scale)
+            entropy_scale_end[cell_idx] = float(args.ent_cell_scale_end)
         stream_policy_id = np.zeros((stream_count,), dtype=np.int64)
         stream_trainable = np.ones((stream_count,), dtype=np.float32)
         env_match_tag: list[str] = ["latest_latest" for _ in range(args.num_envs)]
@@ -667,6 +977,13 @@ def run_training(args: Args) -> None:
         )
         pending_benchmark_samples: list[tuple[int, float]] = []
         last_saved_checkpoint: Path | None = None
+        true_elo_last: _TrueEloResult | None = None
+        true_elo_ladder: list[_TrueEloLadderEntry] = []
+        true_elo_executor = None
+        true_elo_future = None
+        true_elo_queued_job = None
+        true_elo_eval_dir = experiment_dir / "true_elo_eval"
+        true_elo_ladder_dir = experiment_dir / "true_elo_ladder"
 
         def save_checkpoint(path: Path, *, iteration_value: int, is_final: bool) -> None:
             nonlocal last_saved_checkpoint
@@ -686,6 +1003,96 @@ def run_training(args: Args) -> None:
                 path,
             )
             last_saved_checkpoint = path
+
+        def _clone_agent_state_dict_cpu() -> dict[str, torch.Tensor]:
+            return {k: v.detach().cpu().clone() for k, v in agent.state_dict().items()}
+
+        def maybe_add_true_elo_ladder_entry(*, step: int, rating: float) -> None:
+            if not bool(args.true_elo_enabled):
+                return
+            max_size = max(0, int(args.true_elo_ladder_size))
+            if max_size <= 0 or len(true_elo_ladder) >= max_size:
+                return
+            true_elo_ladder_dir.mkdir(parents=True, exist_ok=True)
+            path = true_elo_ladder_dir / f"ladder_step_{int(step):012d}.pt"
+            if not path.exists():
+                torch.save({"model_state_dict": _clone_agent_state_dict_cpu(), "global_step": int(step)}, path)
+            true_elo_ladder.append(
+                _TrueEloLadderEntry(step=int(step), rating=float(rating), checkpoint_path=str(path))
+            )
+
+        def _make_true_elo_job(*, iteration_value: int, step_value: int) -> _TrueEloJob | None:
+            if not bool(args.true_elo_enabled):
+                return None
+            if not true_elo_ladder:
+                return None
+            true_elo_eval_dir.mkdir(parents=True, exist_ok=True)
+            candidate_path = true_elo_eval_dir / (
+                f"candidate_iter_{int(iteration_value):06d}_step_{int(step_value):012d}.pt"
+            )
+            torch.save({"model_state_dict": _clone_agent_state_dict_cpu(), "global_step": int(step_value)}, candidate_path)
+            return _TrueEloJob(
+                candidate_checkpoint_path=str(candidate_path),
+                candidate_step=int(step_value),
+                seed=int(args.seed) + int(iteration_value) * 9973,
+                num_envs=max(1, int(args.true_elo_num_envs)),
+                games_per_opponent=max(1, int(args.true_elo_games_per_opponent)),
+                tick_hz=int(args.cpp_tick_hz),
+                max_sim_seconds=float(args.cpp_max_sim_seconds),
+                ticks_per_decision=max(1, int(args.ticks_per_decision)),
+                num_threads=0,
+                deterministic=bool(args.true_elo_deterministic),
+                policy_cfg=policy_cfg,
+                ladder_entries=tuple(true_elo_ladder),
+            )
+
+        def _submit_or_queue_true_elo_job(job: _TrueEloJob) -> None:
+            nonlocal true_elo_future, true_elo_queued_job
+            if true_elo_executor is None:
+                return
+            if true_elo_future is not None and not true_elo_future.done():
+                if true_elo_queued_job is not None:
+                    try:
+                        Path(true_elo_queued_job.candidate_checkpoint_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                true_elo_queued_job = job
+                return
+            true_elo_future = true_elo_executor.submit(_run_true_elo_job, job)
+
+        def _poll_true_elo_results(*, step_value: int) -> None:
+            nonlocal true_elo_future, true_elo_queued_job, true_elo_last
+            if true_elo_future is not None and true_elo_future.done():
+                result_path: str | None = None
+                try:
+                    res = true_elo_future.result()
+                    result_path = str(res.candidate_checkpoint_path)
+                    true_elo_last = res
+                    writer.add_scalar("benchmark/true_elo", float(res.elo), int(step_value))
+                    writer.add_scalar("benchmark/true_elo_games", float(res.games), int(step_value))
+                    writer.add_scalar("benchmark/true_elo_win_rate", float(res.win_rate), int(step_value))
+                    writer.add_scalar("benchmark/true_elo_draw_rate", float(res.draw_rate), int(step_value))
+                    print(
+                        f"[MIN] true_elo step={_format_compact_number(res.candidate_step, decimals=2)} "
+                        f"elo={res.elo:.1f} games={res.games} win={100.0*res.win_rate:.1f}% draw={100.0*res.draw_rate:.1f}%"
+                    )
+                except Exception as exc:
+                    print(f"[MIN] true_elo evaluator failed: {exc}")
+                finally:
+                    try:
+                        if result_path:
+                            Path(result_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                true_elo_future = None
+                if true_elo_queued_job is not None and true_elo_executor is not None:
+                    queued = true_elo_queued_job
+                    true_elo_queued_job = None
+                    true_elo_future = true_elo_executor.submit(_run_true_elo_job, queued)
+
+        if bool(args.true_elo_enabled):
+            true_elo_executor = ProcessPoolExecutor(max_workers=1)
+            maybe_add_true_elo_ladder_entry(step=0, rating=float(args.benchmark_initial))
 
         assign_rng = np.random.default_rng(int(args.seed) + 17)
 
@@ -816,6 +1223,7 @@ def run_training(args: Args) -> None:
                         "refresh_status": refresh_label,
                         "sim_speed_label": _sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz)),
                         "benchmark_current": float(benchmark_tracker.current_rating),
+                        "true_elo_current": (float(true_elo_last.elo) if true_elo_last is not None else None),
                         "benchmark_games": int(benchmark_tracker.total_games),
                         "benchmark_win_rate": float(benchmark_tracker.win_rate),
                         "active_recent_steps": [
@@ -885,9 +1293,12 @@ def run_training(args: Args) -> None:
         print(f"[MIN] sim speed mode={_sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz))}")
 
         for iteration in range(1, num_iterations + 1):
+            _poll_true_elo_results(step_value=int(global_step))
             if args.anneal_lr:
                 frac = 1.0 - (iteration - 1.0) / max(1, num_iterations)
                 optimizer.param_groups[0]["lr"] = frac * float(args.learning_rate)
+            entropy_schedule_alpha = float(iteration - 1) / float(max(1, num_iterations - 1))
+            entropy_scale_now = _lerp(0.0, 1.0, entropy_schedule_alpha) * (entropy_scale_end - entropy_scale_start) + entropy_scale_start
 
             rollout_start = time.perf_counter()
             decision_step = 0
@@ -926,7 +1337,7 @@ def run_training(args: Args) -> None:
                         if policy is None:
                             raise RuntimeError(f"Missing active opponent policy id={int(pid)} for ongoing episode")
                         with torch.no_grad():
-                            act, lp, _ent, val, rm, cm = policy.get_action_and_value(
+                            act, lp, _ent_by_branch, val, rm, cm = policy.get_action_and_value(
                                 next_obs[idx_t],
                                 next_mask[idx_t],
                                 next_card[idx_t],
@@ -954,7 +1365,9 @@ def run_training(args: Args) -> None:
                 actions_per_env = np.empty((args.num_envs, agent_count, num_branches), dtype=np.int32)
                 actions_per_env[:] = wait_action
                 active_idx = np.flatnonzero(window_active)
-                if active_idx.size > 0:
+                # Apply the sampled decision action only on the first tick of the window.
+                # Subsequent ticks use wait to avoid repeated action re-submission.
+                if active_idx.size > 0 and tick_in_decision == 0:
                     actions_per_env[stream_env[active_idx], stream_team[active_idx]] = current_decision_actions[active_idx]
 
                 pace_before_env_step(
@@ -1096,11 +1509,12 @@ def run_training(args: Args) -> None:
             approx_kl = torch.tensor(0.0, device=device)
             clipfrac_sum = torch.tensor(0.0, device=device)
             clipfrac_count = 0
+            entropy_branch_means = torch.zeros((num_branches,), dtype=torch.float32, device=device)
             for _ in range(args.update_epochs):
                 perm = active[torch.randperm(active_size, device=device)]
                 for start in range(0, active_size, mb_size):
                     mb = perm[start : start + mb_size]
-                    _, newlogprob, entropy, newvalue, _rm, _cm = agent.get_action_and_value(
+                    _, newlogprob, entropy_by_branch, newvalue, _rm, _cm = agent.get_action_and_value(
                         b_obs[mb],
                         b_masks[mb],
                         b_card[mb],
@@ -1133,7 +1547,8 @@ def run_training(args: Args) -> None:
                     else:
                         v_loss = 0.5 * ((newvalue - b_ret[mb]) ** 2).mean()
 
-                    entropy_loss = entropy.mean()
+                    entropy_branch_means = entropy_by_branch.mean(dim=0)
+                    entropy_loss = (entropy_by_branch * entropy_scale_now.unsqueeze(0)).sum(dim=-1).mean()
                     loss = pg_loss - float(args.ent_coef) * entropy_loss + float(args.vf_coef) * v_loss
 
                     optimizer.zero_grad()
@@ -1148,10 +1563,12 @@ def run_training(args: Args) -> None:
                 benchmark_tracker.record_batch(pending_benchmark_samples)
                 pending_benchmark_samples.clear()
 
-            if pool.should_promote(iteration, num_iterations=num_iterations):
+            if pool.should_promote(iteration):
                 pool.promote(agent, step=global_step)
+                maybe_add_true_elo_ladder_entry(step=int(global_step), rating=float(benchmark_tracker.current_rating))
 
-            if pool.should_refresh(iteration, num_iterations=num_iterations):
+            env_decisions_completed = int(global_step // max(1, stream_count))
+            if pool.should_refresh(env_decisions_completed):
                 refresh_status = "Queued"
                 refresh_start = time.perf_counter()
                 pool.refresh_active()
@@ -1201,6 +1618,7 @@ def run_training(args: Args) -> None:
                     f"cf={clipfrac:.4f} mix(ll/lr/la)={ll}/{lr}/{la} "
                     f"speed={_sim_speed_label(sim_speed_mode, int(args.cpp_tick_hz))} "
                     f"bench={float(benchmark_tracker.current_rating):.1f} "
+                    f"true_elo={(float(true_elo_last.elo) if true_elo_last is not None else float('nan')):.1f} "
                     f"games={_format_compact_number(int(benchmark_tracker.total_games), decimals=2)} "
                     f"batch_score={float(benchmark_tracker.last_batch_score):.3f} "
                     f"active_pool(r/a)={len(pool.active_recent_ids)}/{len(pool.active_anchor_ids)}"
@@ -1217,6 +1635,38 @@ def run_training(args: Args) -> None:
                 writer.add_scalar("losses/policy_loss", float(pg_loss.item()), global_step)
                 writer.add_scalar("losses/value_loss", float(v_loss.item()), global_step)
                 writer.add_scalar("losses/entropy", float(entropy_loss.item()), global_step)
+                if wait_idx is not None:
+                    writer.add_scalar("losses/entropy_wait", float(entropy_branch_means[wait_idx].item()), global_step)
+                    writer.add_scalar(
+                        "losses/entropy_wait_scale",
+                        float(entropy_scale_now[wait_idx].item()),
+                        global_step,
+                    )
+                if card_idx is not None:
+                    writer.add_scalar("losses/entropy_card", float(entropy_branch_means[card_idx].item()), global_step)
+                    writer.add_scalar(
+                        "losses/entropy_card_scale",
+                        float(entropy_scale_now[card_idx].item()),
+                        global_step,
+                    )
+                if region_idx is not None:
+                    writer.add_scalar(
+                        "losses/entropy_region",
+                        float(entropy_branch_means[region_idx].item()),
+                        global_step,
+                    )
+                    writer.add_scalar(
+                        "losses/entropy_region_scale",
+                        float(entropy_scale_now[region_idx].item()),
+                        global_step,
+                    )
+                if cell_idx is not None:
+                    writer.add_scalar("losses/entropy_cell", float(entropy_branch_means[cell_idx].item()), global_step)
+                    writer.add_scalar(
+                        "losses/entropy_cell_scale",
+                        float(entropy_scale_now[cell_idx].item()),
+                        global_step,
+                    )
                 writer.add_scalar("losses/approx_kl", float(approx_kl.item()), global_step)
                 writer.add_scalar("losses/clipfrac", clipfrac, global_step)
                 writer.add_scalar("pool/latest_latest_ratio", float(ll) / float(env_count), global_step)
@@ -1235,13 +1685,52 @@ def run_training(args: Args) -> None:
                         float(benchmark_tracker.smoothed_batch_score),
                         global_step,
                     )
+                if true_elo_last is not None:
+                    writer.add_scalar("benchmark/true_elo_latest", float(true_elo_last.elo), global_step)
 
             if int(args.ckpt_every) > 0 and iteration % int(args.ckpt_every) == 0:
                 ckpt_path = experiment_dir / f"ckpt_iter_{iteration:06d}.pt"
                 save_checkpoint(ckpt_path, iteration_value=int(iteration), is_final=False)
 
+            if bool(args.true_elo_enabled):
+                every_iter = max(1, int(args.true_elo_every_iterations))
+                if iteration % every_iter == 0:
+                    job = _make_true_elo_job(iteration_value=int(iteration), step_value=int(global_step))
+                    if job is not None:
+                        _submit_or_queue_true_elo_job(job)
+
         final_ckpt_path = experiment_dir / "ckpt_final.pt"
         save_checkpoint(final_ckpt_path, iteration_value=int(num_iterations), is_final=True)
+        _poll_true_elo_results(step_value=int(global_step))
+        if bool(args.true_elo_enabled):
+            final_job = _make_true_elo_job(iteration_value=int(num_iterations), step_value=int(global_step))
+            if final_job is not None:
+                _submit_or_queue_true_elo_job(final_job)
+            while true_elo_future is not None or true_elo_queued_job is not None:
+                if true_elo_future is None and true_elo_queued_job is not None and true_elo_executor is not None:
+                    queued = true_elo_queued_job
+                    true_elo_queued_job = None
+                    true_elo_future = true_elo_executor.submit(_run_true_elo_job, queued)
+                if true_elo_future is None:
+                    break
+                final_result_path: str | None = None
+                try:
+                    final_res = true_elo_future.result(timeout=None)
+                    final_result_path = str(final_res.candidate_checkpoint_path)
+                    true_elo_last = final_res
+                    writer.add_scalar("benchmark/true_elo", float(final_res.elo), int(global_step))
+                    writer.add_scalar("benchmark/true_elo_games", float(final_res.games), int(global_step))
+                    writer.add_scalar("benchmark/true_elo_win_rate", float(final_res.win_rate), int(global_step))
+                    writer.add_scalar("benchmark/true_elo_draw_rate", float(final_res.draw_rate), int(global_step))
+                except Exception as exc:
+                    print(f"[MIN] true_elo final evaluator failed: {exc}")
+                finally:
+                    try:
+                        if final_result_path:
+                            Path(final_result_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    true_elo_future = None
 
         total_s = max(1e-9, time.perf_counter() - train_start)
         overall_sample_sps = float(global_step / total_s)
@@ -1271,6 +1760,11 @@ def run_training(args: Args) -> None:
             "benchmark_games": int(benchmark_tracker.total_games),
             "benchmark_win_rate": float(benchmark_tracker.win_rate),
             "benchmark_batch_score_ema": float(benchmark_tracker.smoothed_batch_score),
+            "true_elo_enabled": bool(args.true_elo_enabled),
+            "true_elo": float(true_elo_last.elo) if true_elo_last is not None else None,
+            "true_elo_games": int(true_elo_last.games) if true_elo_last is not None else 0,
+            "true_elo_win_rate": float(true_elo_last.win_rate) if true_elo_last is not None else 0.0,
+            "true_elo_draw_rate": float(true_elo_last.draw_rate) if true_elo_last is not None else 0.0,
         }
         (experiment_dir / "timing_summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n",
@@ -1286,6 +1780,13 @@ def run_training(args: Args) -> None:
             f"device={device}"
         )
     finally:
+        if true_elo_queued_job is not None:
+            try:
+                Path(true_elo_queued_job.candidate_checkpoint_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        if true_elo_executor is not None:
+            true_elo_executor.shutdown(wait=False, cancel_futures=True)
         if live_view is not None:
             live_view.close()
         env.close()

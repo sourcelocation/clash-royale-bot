@@ -52,6 +52,21 @@ class MaskedPPOAgent(nn.Module):
         self.card_idx = self.branch_index["card_selection"]
         self.region_idx = self.branch_index["position_region"]
         self.cell_idx = self.branch_index["position_cell"]
+        self.wait_size = int(config.action_branch_sizes[self.wait_idx])
+        self.card_size = int(config.action_branch_sizes[self.card_idx])
+        self.region_size = int(config.action_branch_sizes[self.region_idx])
+        self.cell_size = int(config.action_branch_sizes[self.cell_idx])
+        self.num_branches = int(len(config.action_branch_sizes))
+
+        # Autoregressive logits: wait -> card -> region -> cell.
+        self.card_logits_from_wait = nn.Embedding(self.wait_size, self.card_size)
+        self.region_logits_from_card = nn.Embedding(self.card_size, self.region_size)
+        self.cell_logits_from_card = nn.Embedding(self.card_size, self.cell_size)
+        self.cell_logits_from_region = nn.Embedding(self.region_size, self.cell_size)
+        nn.init.zeros_(self.card_logits_from_wait.weight)
+        nn.init.zeros_(self.region_logits_from_card.weight)
+        nn.init.zeros_(self.cell_logits_from_card.weight)
+        nn.init.zeros_(self.cell_logits_from_region.weight)
 
         self.placement = config.placement
         region_positions, region_positions_valid, region_cell_to_position = self._build_position_lookup()
@@ -166,65 +181,102 @@ class MaskedPPOAgent(nn.Module):
         deterministic: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         features = self.model.encode(x)
-        logits_by_branch = [head(features) for head in self.model.policy_heads]
+        base_logits = [head(features) for head in self.model.policy_heads]
         masks_by_branch = self._split_action_mask(mask)
+        batch_size = x.shape[0]
+        device = x.device
 
-        wait_dist = self._masked_dist(logits_by_branch[self.wait_idx], masks_by_branch[self.wait_idx])
+        wait_dist = self._masked_dist(base_logits[self.wait_idx], masks_by_branch[self.wait_idx])
         wait_action = (
             torch.argmax(wait_dist.logits, dim=-1) if (action is None and deterministic) else
             (wait_dist.sample() if action is None else action[:, self.wait_idx])
         )
+        wait_action = wait_action.to(dtype=torch.long)
 
-        card_dist = self._masked_dist(logits_by_branch[self.card_idx], masks_by_branch[self.card_idx])
-        card_action = (
-            torch.argmax(card_dist.logits, dim=-1) if (action is None and deterministic) else
-            (card_dist.sample() if action is None else action[:, self.card_idx])
-        )
+        card_action = torch.zeros((batch_size,), dtype=torch.long, device=device)
+        region_action = torch.zeros((batch_size,), dtype=torch.long, device=device)
+        cell_action = torch.zeros((batch_size,), dtype=torch.long, device=device)
+        region_mask_used = torch.zeros((batch_size, self.region_size), dtype=mask.dtype, device=device)
+        cell_mask_used = torch.zeros((batch_size, self.cell_size), dtype=mask.dtype, device=device)
 
-        selected_card_position_mask = self._select_card_position_mask(card_position_masks, card_action)
+        logprob = wait_dist.log_prob(wait_action)
+        entropy_by_branch = torch.zeros((batch_size, self.num_branches), dtype=x.dtype, device=device)
+        entropy_by_branch[:, self.wait_idx] = wait_dist.entropy()
 
-        if action is None:
-            region_mask_used = self._build_region_mask(selected_card_position_mask)
-            region_dist = self._masked_dist(logits_by_branch[self.region_idx], region_mask_used)
-            region_action = torch.argmax(region_dist.logits, dim=-1) if deterministic else region_dist.sample()
-            cell_mask_used = self._build_cell_mask(selected_card_position_mask, region_action)
-            cell_dist = self._masked_dist(logits_by_branch[self.cell_idx], cell_mask_used)
-            cell_action = torch.argmax(cell_dist.logits, dim=-1) if deterministic else cell_dist.sample()
-        else:
-            region_action = action[:, self.region_idx]
-            region_mask_used = region_mask if region_mask is not None else self._build_region_mask(
-                selected_card_position_mask
+        play_rows = (wait_action == 0).nonzero(as_tuple=False).reshape(-1)
+        if play_rows.numel() > 0:
+            play_wait = wait_action[play_rows].clamp(min=0, max=max(0, self.wait_size - 1))
+
+            card_logits = (
+                base_logits[self.card_idx][play_rows] + self.card_logits_from_wait(play_wait)
             )
-            region_dist = self._masked_dist(logits_by_branch[self.region_idx], region_mask_used)
-            cell_mask_used = cell_mask if cell_mask is not None else self._build_cell_mask(
-                selected_card_position_mask, region_action
+            card_dist = self._masked_dist(card_logits, masks_by_branch[self.card_idx][play_rows])
+            if action is None:
+                card_choice = torch.argmax(card_dist.logits, dim=-1) if deterministic else card_dist.sample()
+            else:
+                card_choice = action[play_rows, self.card_idx].to(dtype=torch.long)
+            card_action[play_rows] = card_choice
+
+            selected_card_position_mask = self._select_card_position_mask(card_position_masks[play_rows], card_choice)
+
+            region_logits = (
+                base_logits[self.region_idx][play_rows]
+                + self.region_logits_from_card(card_choice.clamp(min=0, max=max(0, self.card_size - 1)))
             )
-            cell_dist = self._masked_dist(logits_by_branch[self.cell_idx], cell_mask_used)
-            cell_action = action[:, self.cell_idx]
+            if action is None:
+                region_mask_play = self._build_region_mask(selected_card_position_mask)
+            else:
+                region_mask_play = (
+                    region_mask[play_rows]
+                    if region_mask is not None
+                    else self._build_region_mask(selected_card_position_mask)
+                )
+            region_dist = self._masked_dist(region_logits, region_mask_play)
+            if action is None:
+                region_choice = torch.argmax(region_dist.logits, dim=-1) if deterministic else region_dist.sample()
+            else:
+                region_choice = action[play_rows, self.region_idx].to(dtype=torch.long)
+            region_action[play_rows] = region_choice
+            region_mask_used[play_rows] = region_mask_play
 
-        not_wait = (wait_action == 0).float()
-        wait_logprob = wait_dist.log_prob(wait_action)
-        card_logprob = card_dist.log_prob(card_action)
-        region_logprob = region_dist.log_prob(region_action)
-        cell_logprob = cell_dist.log_prob(cell_action)
-        logprob = wait_logprob + not_wait * (card_logprob + region_logprob + cell_logprob)
+            cell_logits = (
+                base_logits[self.cell_idx][play_rows]
+                + self.cell_logits_from_card(card_choice.clamp(min=0, max=max(0, self.card_size - 1)))
+                + self.cell_logits_from_region(region_choice.clamp(min=0, max=max(0, self.region_size - 1)))
+            )
+            if action is None:
+                cell_mask_play = self._build_cell_mask(selected_card_position_mask, region_choice)
+            else:
+                cell_mask_play = (
+                    cell_mask[play_rows]
+                    if cell_mask is not None
+                    else self._build_cell_mask(selected_card_position_mask, region_choice)
+                )
+            cell_dist = self._masked_dist(cell_logits, cell_mask_play)
+            if action is None:
+                cell_choice = torch.argmax(cell_dist.logits, dim=-1) if deterministic else cell_dist.sample()
+            else:
+                cell_choice = action[play_rows, self.cell_idx].to(dtype=torch.long)
+            cell_action[play_rows] = cell_choice
+            cell_mask_used[play_rows] = cell_mask_play
 
-        wait_entropy = wait_dist.entropy()
-        card_entropy = card_dist.entropy()
-        region_entropy = region_dist.entropy()
-        cell_entropy = cell_dist.entropy()
-        entropy = wait_entropy + not_wait * (card_entropy + region_entropy + cell_entropy)
+            logprob[play_rows] = logprob[play_rows] + (
+                card_dist.log_prob(card_choice) + region_dist.log_prob(region_choice) + cell_dist.log_prob(cell_choice)
+            )
+            entropy_by_branch[play_rows, self.card_idx] = card_dist.entropy()
+            entropy_by_branch[play_rows, self.region_idx] = region_dist.entropy()
+            entropy_by_branch[play_rows, self.cell_idx] = cell_dist.entropy()
+
+        entropy = entropy_by_branch
 
         if action is None:
             sampled = torch.zeros(
                 (x.shape[0], len(self.action_order)), dtype=torch.long, device=x.device
             )
             sampled[:, self.wait_idx] = wait_action
-            sampled[:, self.card_idx] = torch.where(wait_action == 1, torch.zeros_like(card_action), card_action)
-            sampled[:, self.region_idx] = torch.where(
-                wait_action == 1, torch.zeros_like(region_action), region_action
-            )
-            sampled[:, self.cell_idx] = torch.where(wait_action == 1, torch.zeros_like(cell_action), cell_action)
+            sampled[:, self.card_idx] = card_action
+            sampled[:, self.region_idx] = region_action
+            sampled[:, self.cell_idx] = cell_action
             out_action = sampled
         else:
             out_action = action
